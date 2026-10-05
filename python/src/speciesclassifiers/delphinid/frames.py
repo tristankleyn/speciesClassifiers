@@ -114,9 +114,9 @@ def _event_info(df, skip):
     return info
 
 
-def _feature_frame(rows, n):
+def _feature_frame(rows, n, meta_cols=()):
     cols = [f"f{i + 1}" for i in range(n)]
-    meta = pd.DataFrame([r[0] for r in rows])
+    meta = pd.DataFrame([r[0] for r in rows]) if rows else pd.DataFrame(columns=list(meta_cols))
     feats = pd.DataFrame(np.vstack([r[1] for r in rows]) if rows else np.empty((0, n)), columns=cols)
     return pd.concat([meta, feats], axis=1)
 
@@ -131,7 +131,7 @@ def click_frames(clicks: pd.DataFrame, params: AcousticParams, sample_rate: floa
         raise ValueError("params.voc_type must be 'click'")
     _check_cols(clicks, ["start", "duration", "wave", "event_id"])
     transforms = params.transforms()
-    rows = []
+    rows, n_bad = [], 0
     for ev, d in clicks.groupby("event_id", sort=False):
         d = d.sort_values("start")
         info = _event_info(d, {"start", "duration", "wave", "event_id"})
@@ -140,10 +140,16 @@ def click_frames(clicks: pd.DataFrame, params: AcousticParams, sample_rate: floa
         for t, idx in T.segment_starts(s, s + d["duration"].to_numpy(float), params.frame_len, params.hop):
             if len(idx) < max(params.min_clicks, 1):
                 continue
-            spec = T.clicks2spectrum([waves[i] for i in idx], params.fft_len)
-            x = T.apply_transforms(spec, transforms, sample_rate)
+            with np.errstate(invalid="ignore"):
+                spec = T.clicks2spectrum([waves[i] for i in idx], params.fft_len)
+                x = T.apply_transforms(spec, transforms, sample_rate)
+            if not np.all(np.isfinite(x)):
+                n_bad += 1  # a click with zero power in some bin (PAMGuard gives NaN too)
+                continue
             rows.append(({"event_id": ev, "frame_start": t, "n_detections": len(idx), **info}, x))
-    return _feature_frame(rows, params.n_bins(sample_rate))
+    if n_bad:
+        print(f"Dropped {n_bad} click frame(s) with undefined spectra (a click with zero power in a frequency bin)")
+    return _feature_frame(rows, params.n_bins(sample_rate), ["event_id", "frame_start", "n_detections"])
 
 
 def whistle_frames(contours: pd.DataFrame, params: AcousticParams) -> pd.DataFrame:
@@ -177,7 +183,7 @@ def whistle_frames(contours: pd.DataFrame, params: AcousticParams) -> pd.DataFra
             x = T.apply_transforms(spec, transforms)
             rows.append(({"event_id": ev, "frame_start": t, "n_detections": len(idx),
                           "density": density, **info}, x))
-    return _feature_frame(rows, params.n_bins())
+    return _feature_frame(rows, params.n_bins(), ["event_id", "frame_start", "n_detections", "density"])
 
 
 def _check_cols(df, cols):

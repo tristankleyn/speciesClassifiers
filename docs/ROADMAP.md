@@ -9,8 +9,9 @@ Built in small chunks. Each chunk ends with working, tested code.
 | 3 | delphinID model builder: fixed CNN shape, grouped parameters (acoustic / CNN / training) | Py | ✅ |
 | 4 | delphinID grouped cross-validation: leave-one-group-out, bootstrapped train/val subsamples capped per group | Py | ✅ |
 | 5 | delphinID export to PAMGuard (SavedModel + `delphinID.pdtf`, zipped) — awaiting PAMGuard load test | Py | ✅ |
-| 6 | delphinID notebook (runs locally or in Google Colab) | Py | ⏳ |
-| 7 | `io`: read PAMGuard databases / binaries into standard tables | Py + R | |
+| 6a | Notebook `01_make_frames`: PAMGuard binaries + annotations CSV → frames CSV | Py | ✅ |
+| 6b | Notebook `02_train_delphinID`: frames CSV → cross-validation → final model → PAMGuard zip (local or Colab) | Py | ⏳ |
+| 7 | `io`: read PAMGuard databases / binaries into standard tables (Python binary reader + annotations done in 6a) | Py + R | |
 | 8 | `randomforest`: from scratch on detection features (from ClassifyStuff `Classify-rocca`) | Py + R | |
 | 9 | `transferlearning`: event classifiers on standard outputs (from ClassifyStuff `Classify-delphinID`) | Py + R | |
 | 10 | `calltypes`: split the contour pipeline into modules, generalise, library export, notebook | Py | |
