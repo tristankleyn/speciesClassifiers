@@ -7,8 +7,8 @@ Built in small chunks. Each chunk ends with working, tested code.
 | 1 | Repo skeleton, standard classifier output format + validators | Py + R | ✅ |
 | 2 | delphinID feature transforms: whistle and click detection frames, ported from PAMGuard's Java transforms and checked against PAMGuard's test files | Py | ✅ |
 | 3 | delphinID model builder: fixed CNN shape, grouped parameters (acoustic / CNN / training) | Py | ✅ |
-| 4 | delphinID grouped cross-validation: leave-one-group-out, bootstrapped train/val subsamples capped per group | Py | ⏳ |
-| 5 | delphinID export to PAMGuard (SavedModel + `delphinID.pdtf`, zipped) | Py | |
+| 4 | delphinID grouped cross-validation: leave-one-group-out, bootstrapped train/val subsamples capped per group | Py | ✅ |
+| 5 | delphinID export to PAMGuard (SavedModel + `delphinID.pdtf`, zipped) | Py | ⏳ |
 | 6 | delphinID notebook (runs locally or in Google Colab) | Py | |
 | 7 | `io`: read PAMGuard databases / binaries into standard tables | Py + R | |
 | 8 | `randomforest`: from scratch on detection features (from ClassifyStuff `Classify-rocca`) | Py + R | |
@@ -21,7 +21,7 @@ Built in small chunks. Each chunk ends with working, tested code.
 - **Acoustic** (`AcousticParams`): frequency range, frame length and hop, `min_clicks` / `min_density`, minimum whistle fragment, FFT length, smoothing, downsampling. The number of model inputs follows from these.
 - **CNN** (`CNNParams`; shape fixed: Conv1D → MaxPool → Conv1D → MaxPool → LeakyReLU → Dense → Dropout → softmax): filters, kernel size, max pool, LeakyReLU slope, dense size, dropout, L2
 - **Training** (`TrainingParams`): learning rate, epochs per bootstrap, batch size, patience, seed
-- **Grouped resampling** (chunk 4, two controls): `max_per_group` (cap on examples per group in each bootstrap, default 30) and `n_bootstraps` (resamples per fold, default 5)
+- **Grouped resampling** (`ResamplingParams`): `max_per_group` (cap on examples per group in each bootstrap, default 30) and `n_bootstraps` (resamples per fold, default 5)
 
 Defaults reproduce the published models; loading their weights into `build_model` gives identical predictions.
 
