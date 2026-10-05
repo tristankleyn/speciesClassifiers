@@ -57,7 +57,10 @@ class WindowParams:
 
 def pair_intervals(a_s, a_e, b_s, b_e):
     """All (i, j, overlap) where interval a_i overlaps b_j; b sorted by start."""
-    a_s, a_e, b_s, b_e = (np.asarray(x, float) for x in (a_s, a_e, b_s, b_e))
+    arrs = [np.asarray(x) for x in (a_s, a_e, b_s, b_e)]
+    if not all(np.issubdtype(x.dtype, np.integer) for x in arrs):   # integer times stay exact
+        arrs = [x.astype(float) for x in arrs]
+    a_s, a_e, b_s, b_e = arrs
     max_len = (b_e - b_s).max() if len(b_s) else 0
     lo = np.searchsorted(b_s, a_s - max_len, "left")
     hi = np.searchsorted(b_s, a_e, "left")
@@ -171,8 +174,10 @@ def label_windows(windows, calls, params: WindowParams, min_call_coverage=0.5, s
             w[c] = a[c].to_numpy()
         return w
     calls = calls.sort_values("start")
-    I, J, ov = pair_intervals(w["w_start"], w["w_end"], calls["start"], calls["end"])
-    dur = np.maximum((calls["end"] - calls["start"]).to_numpy()[J], 1e-9)
+    ns = lambda x: np.round(np.asarray(x, float) * 1e6).astype(np.int64)   # integer microseconds: exact ties
+    cs_ns, ce_ns = ns(calls["start"]), ns(calls["end"])
+    I, J, ov = pair_intervals(ns(w["w_start"]), ns(w["w_end"]), cs_ns, ce_ns)
+    dur = np.maximum(ce_ns[J] - cs_ns[J], 1)
     p = pd.DataFrame({"w": I, "ov": ov, "cov": ov / dur, "a": J})
     full = p[p["cov"] >= min_call_coverage]
     best = full.sort_values("ov", ascending=False).drop_duplicates("w").set_index("w")
@@ -208,4 +213,36 @@ def label_windows_by_period(windows, periods, columns=("label",), source="period
             for c in columns:
                 w.at[i, c] = p[c].iloc[j]
             w.at[i, "label_source"] = source
+    return w
+
+
+def label_windows_by_overlap(windows, calls, column, out_col=None, value_map=None, other=None, weak_values=(),
+                             mixed="mixed", annotated_days=None, source="calls"):
+    """Label windows from the calls they overlap, e.g. species or population of the caller.
+
+    A window overlapping calls takes their ``column`` value, mapped through ``value_map`` (values not in
+    it become ``other`` if given); different values give ``mixed``. ``weak_values`` (mapped values, e.g.
+    "unknown") count only if no other value is present. Windows on ``annotated_days`` (all days if None) that overlap no call are "none"; their
+    ``label_source`` is set to ``source``. Other windows are left as they are.
+    """
+    out_col = out_col or column
+    w = windows.reset_index(drop=True).copy()
+    on = (np.ones(len(w), bool) if annotated_days is None else w["day"].isin(annotated_days).to_numpy())
+    if out_col not in w:
+        w[out_col] = "none"
+    if "label_source" not in w:
+        w["label_source"] = "unannotated"
+    w.loc[on, out_col] = "none"
+    w.loc[on, "label_source"] = source
+    calls = calls.sort_values("start")
+    I, J, _ = pair_intervals(w["w_start"], w["w_end"], calls["start"], calls["end"])
+    keep = on[I]
+    vals = calls[column].astype(str).to_numpy()[J[keep]]
+    if value_map:
+        vals = np.array([value_map.get(v, v if other is None else other) for v in vals])
+    weak = set(weak_values)
+    for i, vs in pd.Series(vals).groupby(I[keep]):
+        s = set(vs)
+        strong = s - weak
+        w.at[i, out_col] = (mixed if len(strong) > 1 else next(iter(strong)) if strong else sorted(s)[0])
     return w

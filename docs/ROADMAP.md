@@ -18,8 +18,8 @@ Built in small chunks. Each chunk ends with working, tested code.
 | 9b | `transferlearning` + database reader in the R package + Quarto notebook `04_transferlearning.qmd` | R | ✅ |
 | 10a | `calltypes`: contour filters + measurements, windows + features, labels from call annotations / periods; annotation table converter (matches the original pipeline exactly) | Py | ✅ |
 | 10b | `calltypes`: evaluate how well labelled call types separate (grouped RF CV; matches the original on 3 annotated days) | Py | ✅ |
-| 10c | `calltypes`: discover (hybrid clustering, cluster summaries, user-defined binary label verdicts, leave-one-day-out, decision blocks) | Py | ⏳ |
-| 10d | `calltypes`: frozen library export, reference + standalone classifier, user-defined decision rules, notebook | Py | |
+| 10c | `calltypes`: discover (hybrid clustering, cluster summaries, user-defined binary label verdicts, leave-one-day-out, decision blocks; matches the original exactly on 3 annotated days) | Py | ✅ |
+| 10d | `calltypes`: frozen library export, reference + standalone classifier, user-defined decision rules, notebook | Py | ⏳ |
 | 11 | Docs, examples, CI | – | |
 
 ## delphinID parameters
