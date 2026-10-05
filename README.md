@@ -4,7 +4,7 @@ Tools for building acoustic species classifiers from [PAMGuard](https://www.pamg
 
 [![tests](https://github.com/tristankleyn/speciesClassifiers/actions/workflows/tests.yml/badge.svg)](https://github.com/tristankleyn/speciesClassifiers/actions/workflows/tests.yml)
 
-Documentation: [docs/](docs/README.md) · Data formats: [docs/data_formats.md](docs/data_formats.md)
+**New here?** [How the classifiers work](docs/how_it_works.md) (one page, with diagrams) · Documentation: [docs/](docs/README.md) · Data formats: [docs/data_formats.md](docs/data_formats.md)
 
 ## What's here
 
