@@ -37,3 +37,8 @@ dist/
 .DS_Store
 Thumbs.db
 .pytest_cache/
+
+# Notebook outputs
+notebooks/**/delphinID_run*/
+notebooks/**/frames_*.csv
+notebooks/**/frames_*_params.json

@@ -13,6 +13,9 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
+# Batches run per call into TensorFlow: same training, much less Python overhead with small batches.
+STEPS_PER_EXECUTION = 64
+
 
 @dataclass
 class CNNParams:
@@ -90,7 +93,7 @@ def build_model(n_inputs, n_classes, cnn: CNNParams = None, training: TrainingPa
         L.Dense(n_classes, activation="softmax", name="probabilities"),
     ], name="delphinID")
     model.compile(optimizer=keras.optimizers.Adam(training.learning_rate),
-                  loss="categorical_crossentropy", metrics=["accuracy"])
+                  loss="categorical_crossentropy", metrics=["accuracy"], steps_per_execution=STEPS_PER_EXECUTION, jit_compile=True)
     return model
 
 

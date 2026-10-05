@@ -92,7 +92,14 @@ def export_pamguard(model, acoustic: AcousticParams, classes, path, sample_rate=
 
     with tempfile.TemporaryDirectory() as tmp:
         folder = Path(tmp) / path.stem
-        model.export(str(folder), verbose=False)
+        import logging
+        tf_logger = logging.getLogger("tensorflow")
+        level = tf_logger.level
+        tf_logger.setLevel(logging.ERROR)
+        try:
+            model.export(str(folder), verbose=False)
+        finally:
+            tf_logger.setLevel(level)
         (folder / PDTF_NAME).write_text(json.dumps(pdtf, indent=1))
         (folder / INFO_NAME).write_text(json.dumps(meta, indent=1, default=str))
         path.parent.mkdir(parents=True, exist_ok=True)

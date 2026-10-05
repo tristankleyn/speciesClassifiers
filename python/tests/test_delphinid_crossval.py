@@ -57,3 +57,24 @@ def test_cross_validate_end_to_end():
     assert hist["bootstrap"].max() == 2
     s = summarise(preds)
     assert s["event_accuracy"] == 1.0 and s["frame_accuracy"] > 0.9
+
+
+def test_group_folds_spread_classes():
+    from speciesclassifiers.delphinid.crossval import group_folds
+    groups = [f"{c}{i}" for c in "ABC" for i in range(4)]
+    labels = [g[0] for g in groups]
+    folds = group_folds(groups, labels, 4)
+    assert sorted(sum(folds, [])) == sorted(groups)
+    assert all(sorted(g[0] for g in f) == ["A", "B", "C"] for f in folds)
+
+
+def test_cross_validate_n_folds():
+    pytest.importorskip("keras")
+    from speciesclassifiers.delphinid.crossval import cross_validate, summarise
+    from speciesclassifiers.delphinid.model import TrainingParams
+    frames = _synthetic_frames(n_events=3, n_frames=10)
+    preds, hist = cross_validate(frames, training=TrainingParams(epochs=3, batch_size=8, learning_rate=0.01),
+                                 resampling=ResamplingParams(max_per_group=10, n_bootstraps=1), n_folds=3,
+                                 progress=False)
+    assert preds["fold"].nunique() == 3 and preds["event_id"].nunique() == 9
+    assert summarise(preds)["event_accuracy"] >= 0.8

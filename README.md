@@ -19,6 +19,13 @@ Shared pieces:
 
 User-facing workflows live in `notebooks/` (Jupyter for Python, Quarto for R). Each notebook has its adjustable parameters at the top.
 
+| Notebook | Does |
+|---|---|
+| `notebooks/python/01_make_frames.ipynb` | PAMGuard binaries + annotations CSV → delphinID detection frames |
+| `notebooks/python/02_train_delphinID.ipynb` | Frames → cross-validation → final model → PAMGuard zip (runs in Google Colab too) |
+
+Try `02_train_delphinID` straight away with the synthetic example in `examples/`.
+
 ## Layout
 
 ```

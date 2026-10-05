@@ -129,14 +129,30 @@ def to_standard_output(frames, probs, classes, classifier, voc_type, label_col=N
     return out
 
 
+def group_folds(groups, labels, n_folds, seed=0):
+    """Split groups into ``n_folds`` folds, spreading each class's groups evenly across folds."""
+    g = pd.DataFrame({"group": groups, "label": labels}).drop_duplicates("group")
+    rng = np.random.default_rng(seed)
+    folds = [[] for _ in range(n_folds)]
+    k = 0
+    for _, sub in g.groupby("label"):
+        for grp in rng.permutation(sub["group"].to_numpy()):
+            folds[k % n_folds].append(grp)
+            k += 1
+    return [f for f in folds if f]
+
+
 def cross_validate(frames, classes=None, label_col="label", group_col="event_id",
                    cnn: CNNParams = None, training: TrainingParams = None,
-                   resampling: ResamplingParams = None, test_groups=None,
+                   resampling: ResamplingParams = None, test_groups=None, n_folds=None,
                    classifier="delphinID", voc_type="whistle", progress=True):
-    """Leave-one-group-out cross-validation with bootstrapped training.
+    """Grouped cross-validation with bootstrapped training.
 
-    For each test group a fresh model is trained (``fit_bootstrapped``) on all other groups and
-    used to predict every frame of the test group.
+    By default leave-one-group-out: for each test group a fresh model is trained
+    (``fit_bootstrapped``) on all other groups and predicts every frame of the test group.
+    With ``n_folds``, groups are split into that many folds (each class's groups spread evenly)
+    and each fold is left out in turn: far fewer models to train on large datasets.
+    ``test_groups`` limits leave-one-group-out to some groups (e.g. for a quick trial).
 
     Returns ``(predictions, history)``: frame predictions in the standard classifier output
     format (plus ``true_class`` and ``test_group``), and the training history of every fold.
@@ -146,27 +162,36 @@ def cross_validate(frames, classes=None, label_col="label", group_col="event_id"
     classes = list(classes) if classes is not None else sorted(frames[label_col].unique())
     frames = frames[frames[label_col].isin(classes)].reset_index(drop=True)
     feats = feature_columns(frames)
-    groups = list(test_groups) if test_groups is not None else list(pd.unique(frames[group_col]))
+    if n_folds:
+        folds = group_folds(frames[group_col], frames[label_col], n_folds, training.seed)
+    else:
+        groups = list(test_groups) if test_groups is not None else list(pd.unique(frames[group_col]))
+        folds = [[g] for g in groups]
     preds, hists = [], []
-    for k, g in enumerate(groups):
-        test = frames[frames[group_col] == g]
-        rest = frames[frames[group_col] != g]
+    for k, fold in enumerate(folds):
+        g = fold[0] if len(fold) == 1 else f"fold{k + 1}"
+        in_test = frames[group_col].isin(fold)
+        test, rest = frames[in_test], frames[~in_test]
         missing = set(classes) - set(rest[label_col])
         if missing:
-            print(f"[{k + 1}/{len(groups)}] {g}: skipped, no training data left for {sorted(missing)}")
+            print(f"[{k + 1}/{len(folds)}] {g}: skipped, no training data left for {sorted(missing)}")
             continue
         model, h = fit_bootstrapped(rest, classes, label_col, group_col, cnn, training, resampling,
                                     seed=training.seed + k)
         p = predict(model, test[feats].to_numpy("float32"))
         out = to_standard_output(test, p, classes, classifier, voc_type, label_col)
-        out["test_group"] = g
+        out["test_group"] = test[group_col].astype(str).repeat(len(classes)).to_numpy()
+        out["fold"] = k + 1
         preds.append(out)
-        hists.append(h.assign(test_group=g))
+        hists.append(h.assign(fold=k + 1, test_group=g))
         if progress:
             acc = (np.array(classes)[p.argmax(1)] == test[label_col].to_numpy()).mean()
-            ev = np.array(classes)[p.sum(0).argmax()]
-            print(f"[{k + 1}/{len(groups)}] {g}: {len(test)} frames, frame accuracy {acc:.2f}, "
-                  f"group prediction {ev} (true {test[label_col].iloc[0]})")
+            if len(fold) == 1:
+                ev = np.array(classes)[p.sum(0).argmax()]
+                print(f"[{k + 1}/{len(folds)}] {g}: {len(test)} frames, frame accuracy {acc:.2f}, "
+                      f"group prediction {ev} (true {test[label_col].iloc[0]})")
+            else:
+                print(f"[{k + 1}/{len(folds)}] {len(fold)} groups, {len(test)} frames, frame accuracy {acc:.2f}")
         del model
         _clear_session()
     return pd.concat(preds, ignore_index=True), pd.concat(hists, ignore_index=True)

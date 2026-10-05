@@ -10,7 +10,7 @@ Built in small chunks. Each chunk ends with working, tested code.
 | 4 | delphinID grouped cross-validation: leave-one-group-out, bootstrapped train/val subsamples capped per group | Py | ✅ |
 | 5 | delphinID export to PAMGuard (SavedModel + `delphinID.pdtf`, zipped) — awaiting PAMGuard load test | Py | ✅ |
 | 6a | Notebook `01_make_frames`: PAMGuard binaries + annotations CSV → frames CSV | Py | ✅ |
-| 6b | Notebook `02_train_delphinID`: frames CSV → cross-validation → final model → PAMGuard zip (local or Colab) | Py | ⏳ |
+| 6b | Notebook `02_train_delphinID`: frames CSV → cross-validation → final model → PAMGuard zip (local or Colab) | Py | ✅ |
 | 7 | `io`: read PAMGuard databases / binaries into standard tables (Python binary reader + annotations done in 6a) | Py + R | |
 | 8 | `randomforest`: from scratch on detection features (from ClassifyStuff `Classify-rocca`) | Py + R | |
 | 9 | `transferlearning`: event classifiers on standard outputs (from ClassifyStuff `Classify-delphinID`) | Py + R | |
@@ -23,6 +23,7 @@ Built in small chunks. Each chunk ends with working, tested code.
 - **CNN** (`CNNParams`; shape fixed: Conv1D → MaxPool → Conv1D → MaxPool → LeakyReLU → Dense → Dropout → softmax): filters, kernel size, max pool, LeakyReLU slope, dense size, dropout, L2
 - **Training** (`TrainingParams`): learning rate, epochs per bootstrap, batch size, patience, seed
 - **Grouped resampling** (`ResamplingParams`): `max_per_group` (cap on examples per group in each bootstrap, default 30) and `n_bootstraps` (resamples per fold, default 5)
+- **Cross-validation**: leave-one-group-out by default; `n_folds` groups the test groups into folds for large datasets
 
 Defaults reproduce the published models; loading their weights into `build_model` gives identical predictions.
 
