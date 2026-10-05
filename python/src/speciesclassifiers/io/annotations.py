@@ -16,14 +16,20 @@ import pandas as pd
 REQUIRED = ["event_id", "label", "start", "end"]
 
 
-def read_annotations(path_or_df):
-    """Read and check an annotations CSV (or DataFrame). Times become Unix seconds (UTC)."""
+def read_annotations(path_or_df, require_label=True):
+    """Read and check an annotations CSV (or DataFrame). Times become Unix seconds (UTC).
+
+    ``require_label=False`` allows a table of unlabelled events (event_id, start, end), e.g. for new data.
+    """
     a = pd.read_csv(path_or_df) if not isinstance(path_or_df, pd.DataFrame) else path_or_df.copy()
     a.columns = [c.strip() for c in a.columns]
-    missing = [c for c in REQUIRED if c not in a.columns]
+    required = REQUIRED if require_label else [c for c in REQUIRED if c != "label"]
+    missing = [c for c in required if c not in a.columns]
     if missing:
-        raise ValueError(f"Annotations need columns {REQUIRED}; missing {missing}")
+        raise ValueError(f"Annotations need columns {required}; missing {missing}")
     for c in ["start", "end"]:
+        if pd.api.types.is_numeric_dtype(a[c]):  # already Unix seconds
+            continue
         t = pd.to_datetime(a[c], utc=True, errors="coerce")
         bad = a.loc[t.isna(), c]
         if len(bad):
@@ -32,7 +38,8 @@ def read_annotations(path_or_df):
     if (a["end"] <= a["start"]).any():
         raise ValueError(f"Rows where end is not after start: {list(a.index[a['end'] <= a['start']])}")
     a["event_id"] = a["event_id"].astype(str)
-    a["label"] = a["label"].astype(str)
+    if "label" in a:
+        a["label"] = a["label"].astype(str)
     return a
 
 

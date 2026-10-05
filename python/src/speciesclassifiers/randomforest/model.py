@@ -169,7 +169,8 @@ def group_predictions(detections, min_score=0.0, group_col="event_id"):
 
 
 def cross_validate(df, features, label_col="label", group_col="event_id", params: RFParams = None,
-                   classifier="randomforest", voc_type="whistle", id_col=None, time_col=None, progress=True):
+                   classifier="randomforest", voc_type="whistle", id_col=None, time_col=None, progress=True,
+                   unit="detections"):
     """Leave-one-group-out cross-validation.
 
     For each group, a forest is trained on all other groups (pruned and capped per group) and
@@ -195,7 +196,7 @@ def cross_validate(df, features, label_col="label", group_col="event_id", params
         if progress:
             mean = p.mean(0)
             print(f"[{k + 1}/{len(groups)}] {g} ({test[label_col].iloc[0]}): predicted {m.classes[mean.argmax()]} "
-                  f"(score {decision_score(mean[None])[0]:.2f}, {len(test)} detections)")
+                  f"(score {decision_score(mean[None])[0]:.2f}, {len(test)} {unit})")
     preds = pd.concat(out, ignore_index=True)
     validate_output(preds)
     return preds
