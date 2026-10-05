@@ -12,7 +12,8 @@ Built in small chunks. Each chunk ends with working, tested code.
 | 6a | Notebook `01_make_frames`: PAMGuard binaries + annotations CSV → frames CSV | Py | ✅ |
 | 6b | Notebook `02_train_delphinID`: frames CSV → cross-validation → final model → PAMGuard zip (local or Colab) | Py | ✅ |
 | 7 | `io`: read PAMGuard databases / binaries into standard tables (Python binary reader + annotations done in 6a) | Py + R | |
-| 8 | `randomforest`: from scratch on detection features (from ClassifyStuff `Classify-rocca`) | Py + R | |
+| 8a | `randomforest` (Python) + notebook `03_randomforest`: ROCCA or any feature table, from ClassifyStuff `Classify-rocca` | Py | ✅ |
+| 8b | `randomforest` in the R package + Quarto notebook | R | ⏳ |
 | 9 | `transferlearning`: event classifiers on standard outputs (from ClassifyStuff `Classify-delphinID`) | Py + R | |
 | 10 | `calltypes`: split the contour pipeline into modules, generalise, library export, notebook | Py | |
 | 11 | Docs, examples, CI | – | |
