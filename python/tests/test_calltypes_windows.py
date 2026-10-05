@@ -8,7 +8,7 @@ from speciesclassifiers.calltypes import (ContourParams, WindowParams, contour_p
                                           label_windows_by_period, make_windows, prepare_contours,
                                           window_features)
 from speciesclassifiers.io import read_annotations
-from speciesclassifiers.io.raven import read_raven
+from speciesclassifiers.io.annotation_tables import read_annotation_table
 
 T0 = pd.Timestamp("2024-06-01 10:00:00", tz="UTC").timestamp()
 SL = 1024 / 96000
@@ -70,14 +70,14 @@ def test_labels_partial_mixed_periods():
     assert set(pw["label_source"]) <= {"events", "unannotated"}
 
 
-def test_raven_clock_and_relative(tmp_path):
+def test_annotation_table_clock_and_relative(tmp_path):
     f = tmp_path / "sel.txt"
     pd.DataFrame({"Selection": [1, 2], "Begin Time (s)": [1.0, 5.0], "End Time (s)": [2.0, 5.0],
                   "Begin Date": ["2024/06/01", "2024/06/01"], "Begin Clock Time": ["10:00:01.000", "10:00:05.000"],
                   "Call": ["S01", "S02"]}).to_csv(f, sep="\t", index=False)
-    a = read_raven(f, label_col="Call")
+    a = read_annotation_table(f, label_col="Call")
     assert list(a["label"]) == ["S01"] and a.loc[0, "start"].startswith("2024-06-01 10:00:01")  # zero-length dropped
-    b = read_raven(f, label_col="Call", recording_start="2024-06-01 09:00:00")
+    b = read_annotation_table(f, label_col="Call", recording_start="2024-06-01 09:00:00")
     assert b.loc[0, "end"].startswith("2024-06-01 09:00:02") and b.loc[0, "event_id"] == "sel"
 
 
