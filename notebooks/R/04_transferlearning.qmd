@@ -1,0 +1,231 @@
+---
+title: "4 · Transfer learning: event classifiers from base-classifier outputs"
+format: html
+editor: visual
+---
+
+Retrain an **event classifier** for new labels (species, populations, call types...) on the outputs of classifiers you already have, without retraining those base classifiers. This is the R version of `notebooks/python/04_transferlearning.ipynb`; both use the same settings and write the same outputs.
+
+**Base classifiers** can be anything that writes predictions in the [standard classifier output format](../../schemas/classifier_output.md): delphinID models run in PAMGuard (read straight from the PAMGuard database), random forests from notebook 3, or others, in any combination.
+
+**How it works**
+
+1.  Base-classifier predictions are grouped into **events** (labelled time periods, recordings, or fixed time bins).
+2.  Each event is summarised by the **mean probability of each class from each base classifier**, e.g. `delphinID_whistles|Dde`. A base classifier with no predictions in an event contributes zeros.
+3.  A random forest learns to map these event features to your labels. It's tested by leaving out one group (e.g. encounter) at a time.
+
+**Outputs** (in `output_dir`):
+
+-   event predictions from cross-validation (standard format)
+-   an accuracy summary
+-   the model (`.rds`)
+-   predictions for new data
+
+By default it runs on a small **synthetic** example (`examples/base_predictions_example_synthetic.csv`, `examples/events_example_synthetic.csv`).
+
+## Setup
+
+Install the package once from the repository folder: `install.packages("R/speciesClassifiers", repos = NULL, type = "source")` (it needs `randomForest`, `DBI`, `RSQLite`, `jsonlite`).
+
+```{r}
+#| message: false
+library(speciesClassifiers)
+```
+
+## 1 · Load base-classifier predictions
+
+Choose **one** source:
+
+-   `"csv"`: one or more CSVs in the standard classifier output format (needs a `time` column).
+-   `"database"`: deep learning prediction tables in a PAMGuard database. PAMGuard doesn't store class names, so give them for each table, either as a vector or as the path to the model zip (its `.pdtf` lists them).
+
+```{r}
+source_type <- "csv"   # "csv" or "database"
+
+# csv
+prediction_csvs <- c("../../examples/base_predictions_example_synthetic.csv")
+
+# database
+database <- "path/to/database.sqlite3"
+tables <- list(   # table name = list(name to use, vocalisation type, class names or model zip)
+  Deep_Learning_Classifier___Whistles = list("delphinID_whistles", "whistle", c("Dde", "Ggr", "Gme", "Lac", "Lal", "Oor", "Ttr")),
+  Deep_Learning_Classifier___Clicks   = list("delphinID_clicks",   "click",   c("Dde", "Ggr", "Gme", "Lal", "Ttr"))
+)
+output_dir <- "transferlearning_run"
+
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+if (source_type == "csv") {
+  preds <- do.call(rbind, lapply(prediction_csvs, utils::read.csv))
+} else {
+  print(list_prediction_tables(database))
+  preds <- do.call(rbind, lapply(names(tables), function(t) {
+    x <- tables[[t]]
+    classes <- if (length(x[[3]]) == 1 && grepl("\\.(zip|pdtf)$", x[[3]])) classes_from_model(x[[3]]) else x[[3]]
+    read_dl_predictions(database, t, classes, x[[1]], x[[2]])
+  }))
+}
+data.frame(predictions = tapply(preds$detection_id, preds$classifier, function(x) length(unique(x))),
+           classes = tapply(preds$class, preds$classifier, function(x) length(unique(x))))
+```
+
+## 2 · Define events
+
+-   `"csv"`: an events CSV in the annotations format: `event_id, label, start, end` (UTC), plus a grouping column such as `encounter` and any others. **Needed for training.**
+-   `"recordings"`: one event per recording file in the database's Sound_Acquisition table.
+-   `"bins"`: fixed time bins of `bin_minutes`.
+
+To label events made from recordings or bins, as in Classify-delphinID:
+
+1.  Run with `"recordings"` or `"bins"` and `export_for_labelling <- TRUE`.
+2.  Open `events_to_label.csv` and fill in `label` (and e.g. `encounter`).
+3.  Come back with `events_type <- "csv"` pointing to that file.
+
+```{r}
+events_type <- "csv"      # "csv", "recordings" or "bins"
+events_csv <- "../../examples/events_example_synthetic.csv"
+bin_minutes <- 10
+export_for_labelling <- FALSE
+
+if (events_type == "csv") {
+  assigned <- assign_events(preds, events_csv)
+} else if (events_type == "recordings") {
+  rec <- read_recordings(database)
+  assigned <- assign_events(preds, rec)
+} else {
+  assigned <- time_bin_events(preds, bin_minutes)
+}
+r <- event_features(assigned)
+events <- r$events
+features <- r$features
+
+if (export_for_labelling) {
+  if (events_type == "recordings") {
+    t <- rec[rec$event_id %in% events$event_id, ]
+  } else {
+    t <- data.frame(event_id = events$event_id, start = events$first_detection, end = events$last_detection)
+    if (events_type == "bins") {
+      t$start <- speciesClassifiers:::.to_unix(events$event_id)
+      t$end <- t$start + bin_minutes * 60
+    }
+  }
+  t$start <- speciesClassifiers:::.iso(t$start); t$end <- speciesClassifiers:::.iso(t$end)
+  t$label <- ""; t$encounter <- ""
+  write.csv(t, file.path(output_dir, "events_to_label.csv"), row.names = FALSE)
+  cat(sprintf("Wrote %d events to %s: add labels, then use events_type <- 'csv'\n", nrow(t),
+              file.path(output_dir, "events_to_label.csv")))
+}
+cat(sprintf("%d events, %d features\n", nrow(events), length(features)))
+head(events)
+```
+
+## 3 · Filter events
+
+Events with few base-classifier predictions carry little information. `min_detections` sets a minimum per base classifier; `mode = "or"` keeps events meeting any minimum, `"and"` only those meeting all.
+
+```{r}
+label_col <- "label"
+group_col <- "encounter"   # independent unit for testing; "event_id" = each event on its own
+min_detections <- list(delphinID_clicks = 5, delphinID_whistles = 3)
+mode <- "or"
+
+events_f <- filter_events(events, min_detections, mode)
+events_f <- events_f[!is.na(events_f[[label_col]]) & events_f[[label_col]] != "", ]
+events_f[[label_col]] <- as.character(events_f[[label_col]])
+cat(sprintf("%d of %d events kept\n", nrow(events_f), nrow(events)))
+data.frame(groups = tapply(events_f[[group_col]], events_f[[label_col]], function(x) length(unique(x))),
+           events = as.vector(table(events_f[[label_col]])))
+```
+
+Events in the space of their features (first two principal components), coloured by label. Labels that separate here are easier to classify.
+
+```{r}
+#| fig-width: 6
+#| fig-height: 4.5
+pcs <- stats::prcomp(events_f[features])$x[, 1:2]
+labs <- sort(unique(events_f[[label_col]]))
+cols <- grDevices::hcl.colors(length(labs), "Dark 3")
+plot(pcs, col = cols[match(events_f[[label_col]], labs)], pch = 16)
+legend("topright", labs, col = cols, pch = 16, bty = "n")
+```
+
+## 4 · Train and test
+
+```{r}
+n_trees   <- 1000
+mtry      <- NULL   # features tried per split; NULL = square root of the number of features
+node_size <- 5      # minimum events per leaf
+prune     <- 0      # share of each label's training events to drop as outliers
+seed      <- 42
+
+params <- tl_params(n_trees, mtry, node_size, prune, seed)
+cv <- tl_cross_validate(events_f, features, label_col, group_col, params)
+write.csv(cv, file.path(output_dir, "cv_event_predictions.csv"), row.names = FALSE)
+```
+
+## Results
+
+`min_score` discards events whose decision score (p1 × (p1 − p2)) is below it: fewer events classified, more of them correct.
+
+```{r}
+min_score <- 0
+s <- tl_summarise(cv, min_score)
+cat(sprintf("Event accuracy: %.1f%%   Mean class accuracy: %.1f%%   Events discarded: %.1f%%\n",
+            100 * s$event_accuracy, 100 * s$mean_class_accuracy, 100 * s$events_discarded))
+round(s$accuracy_by_class, 2)
+s$confusion
+```
+
+```{r}
+ev <- transform(s$events, correct = predicted == true_class)
+ev[order(ev$correct, ev$score), c("event", "group", "true_class", "predicted", "correct", "score")]
+```
+
+```{r}
+#| fig-width: 7
+#| fig-height: 4
+curve <- tl_threshold_curve(cv)
+plot(curve$threshold, curve$event_accuracy, type = "l", ylim = c(0, 1.05), lwd = 2, xlab = "Minimum score", ylab = "")
+lines(curve$threshold, curve$mean_class_accuracy, col = 2, lwd = 2)
+lines(curve$threshold, curve$events_kept, lty = 2, col = 3, lwd = 2)
+legend("bottomleft", c("event accuracy", "mean class accuracy", "events kept"), col = 1:3, lty = c(1, 1, 2), bty = "n")
+```
+
+## 5 · Final model
+
+Trained on all filtered events. Feature importance shows which base-classifier outputs the new classifier relies on.
+
+```{r}
+#| fig-width: 6
+#| fig-height: 5
+model <- tl_fit(events_f, features, label_col, group_col, params)
+rf_save(model, file.path(output_dir, "event_classifier.rds"))
+imp <- rf_importance(model)
+par(mar = c(4, 14, 2, 1))
+barplot(rev(utils::head(imp, 15)), horiz = TRUE, las = 1, xlab = "Mean decrease in Gini impurity", main = "Top features")
+```
+
+## 6 · Classify new data
+
+Load new base-classifier predictions (same base classifiers and names as for training), make events, and apply the model. Use the same `min_detections` filter as in training.
+
+```{r}
+run_new <- FALSE
+new_prediction_csvs <- c("path/to/new_predictions.csv")   # or build `new_preds` from a database as in step 1
+new_events_type <- "bins"     # "csv", "recordings" (needs new_database) or "bins"
+new_events_csv <- "path/to/new_events.csv"
+new_database <- "path/to/new_database.sqlite3"
+model_path <- file.path(output_dir, "event_classifier.rds")
+
+if (run_new) {
+  m <- rf_load(model_path)
+  new_preds <- do.call(rbind, lapply(new_prediction_csvs, utils::read.csv))
+  a <- switch(new_events_type,
+              csv = assign_events(new_preds, new_events_csv),
+              recordings = assign_events(new_preds, read_recordings(new_database)),
+              bins = time_bin_events(new_preds, bin_minutes))
+  new_events <- filter_events(event_features(a)$events, min_detections, mode)
+  result <- tl_predict(m, new_events)
+  write.csv(result, file.path(output_dir, "new_event_predictions.csv"), row.names = FALSE)
+  result[c("event_id", "predicted", "score", m$classes)]
+}
+```

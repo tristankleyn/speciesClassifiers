@@ -11,12 +11,12 @@ Built in small chunks. Each chunk ends with working, tested code.
 | 5 | delphinID export to PAMGuard (SavedModel + `delphinID.pdtf`, zipped) — awaiting PAMGuard load test | Py | ✅ |
 | 6a | Notebook `01_make_frames`: PAMGuard binaries + annotations CSV → frames CSV | Py | ✅ |
 | 6b | Notebook `02_train_delphinID`: frames CSV → cross-validation → final model → PAMGuard zip (local or Colab) | Py | ✅ |
-| 7 | `io`: PAMGuard binaries + annotations (6a), databases (9a) in Python; R database reader in 9b | Py + R | ✅ Py |
+| 7 | `io`: PAMGuard binaries + annotations (6a), databases (9a/9b) | Py + R | ✅ |
 | 8a | `randomforest` (Python) + notebook `03_randomforest`: ROCCA or any feature table, from ClassifyStuff `Classify-rocca` | Py | ✅ |
 | 8b | `randomforest` in the R package + Quarto notebook `03_randomforest.qmd` | R | ✅ |
 | 9a | `transferlearning` (Python) + PAMGuard database reader + notebook `04_transferlearning` (from ClassifyStuff `Classify-delphinID`) | Py | ✅ |
-| 9b | `transferlearning` + database reader in the R package + Quarto notebook | R | ⏳ |
-| 10 | `calltypes`: split the contour pipeline into modules, generalise, library export, notebook | Py | |
+| 9b | `transferlearning` + database reader in the R package + Quarto notebook `04_transferlearning.qmd` | R | ✅ |
+| 10 | `calltypes`: split the contour pipeline into modules, generalise, library export, notebook | Py | ⏳ |
 | 11 | Docs, examples, CI | – | |
 
 ## delphinID parameters

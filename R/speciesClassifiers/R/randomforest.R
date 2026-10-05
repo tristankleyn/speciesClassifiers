@@ -131,7 +131,8 @@ group_predictions <- function(detections, min_score = 0, group_col = "event_id")
 #' For each group, a forest trained on all other groups predicts every detection of that group.
 #' @return detection predictions (standard classifier output, plus `score`, `true_class`, `test_group`)
 rf_cross_validate <- function(df, features, label_col = "label", group_col = "event_id", params = rf_params(),
-                              classifier = "randomforest", voc_type = "whistle", id_col = NULL, progress = TRUE) {
+                              classifier = "randomforest", voc_type = "whistle", id_col = NULL, progress = TRUE,
+                              unit = "detections") {
   df[[label_col]] <- as.character(df[[label_col]])
   groups <- unique(df[[group_col]])
   out <- list()
@@ -150,8 +151,8 @@ rf_cross_validate <- function(df, features, label_col = "label", group_col = "ev
     out[[length(out) + 1]] <- d
     if (progress) {
       mp <- colMeans(p)
-      cat(sprintf("[%d/%d] %s (%s): predicted %s (score %.2f, %d detections)\n", k, length(groups), g,
-                  test[[label_col]][1], m$classes[which.max(mp)], decision_score(t(mp)), nrow(test)))
+      cat(sprintf("[%d/%d] %s (%s): predicted %s (score %.2f, %d %s)\n", k, length(groups), g,
+                  test[[label_col]][1], m$classes[which.max(mp)], decision_score(t(mp)), nrow(test), unit))
     }
   }
   preds <- do.call(rbind, out)
