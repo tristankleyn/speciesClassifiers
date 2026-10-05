@@ -19,27 +19,10 @@ WHISTLE_BIN_HZ = 100.0  # fixed in PAMGuard's whistle2AverageArray
 
 
 # ---------------------------------------------------------------- clicks ---------------
-def clip_around_peak(wave, length):
-    """``length`` samples centred on the waveform's absolute peak (as PAMpal's clipAroundPeak)."""
+def click_power_spectrum(wave, fft_len, hann=False):
+    """Power spectrum of one click: |FFT|^2 of the waveform, zero-padded or truncated (from the
+    start) to ``fft_len``, first ``fft_len / 2`` bins (DC up to but excluding Nyquist)."""
     wave = np.asarray(wave, dtype=float)
-    if len(wave) <= length:
-        return wave
-    low = int(np.argmax(np.abs(wave))) - length // 2
-    low = min(max(low, 0), len(wave) - length)
-    return wave[low:low + length]
-
-
-def click_power_spectrum(wave, fft_len, hann=False, mode="pamguard"):
-    """Power spectrum of one click: |FFT|^2 of the waveform, zero-padded to ``fft_len``,
-    first ``fft_len / 2`` bins (DC up to but excluding Nyquist).
-
-    Clicks longer than ``fft_len`` are cut to ``fft_len`` samples: from the start in
-    ``mode="pamguard"`` (as PAMGuard does), or centred on the peak in ``mode="legacy"`` (as the
-    original delphinID training features, made with PAMpal).
-    """
-    wave = np.asarray(wave, dtype=float)
-    if mode == "legacy":
-        wave = clip_around_peak(wave, fft_len)
     if hann:
         wave = wave * np.hanning(len(wave))
     padded = np.zeros(fft_len)
@@ -49,7 +32,7 @@ def click_power_spectrum(wave, fft_len, hann=False, mode="pamguard"):
     return spec.real ** 2 + spec.imag ** 2
 
 
-def clicks2spectrum(waves, fft_len=512, spectrum_db=True, hann=False, mode="pamguard"):
+def clicks2spectrum(waves, fft_len=512, spectrum_db=True, hann=False):
     """Average spectrum of a group of clicks (PAMGuard ``clicks2spectrum``).
 
     Each click's power spectrum is converted to 20*log10 (as PAMGuard does), averaged over
@@ -59,7 +42,7 @@ def clicks2spectrum(waves, fft_len=512, spectrum_db=True, hann=False, mode="pamg
         raise ValueError("No clicks in group")
     total = np.zeros(fft_len // 2)
     for w in waves:
-        ps = click_power_spectrum(w, fft_len, hann, mode)
+        ps = click_power_spectrum(w, fft_len, hann)
         if spectrum_db:
             with np.errstate(divide="ignore"):
                 ps = 20 * np.log10(ps)
@@ -86,20 +69,16 @@ def whistle_points(contours, seg_start, min_frag_ms=0.0):
     return np.vstack(pts) if pts else np.empty((0, 2))
 
 
-def whistles2spectrum(contours, seg_start, seg_len, freq_range=(2000.0, 20000.0), min_frag_ms=200.0,
-                      mode="pamguard"):
+def whistles2spectrum(contours, seg_start, seg_len, freq_range=(2000.0, 20000.0), min_frag_ms=200.0):
     """Normalised histogram of whistle contour frequencies in 100 Hz bins
     (PAMGuard ``whistles2spectrum``).
 
-    ``mode="pamguard"`` uses every contour PAMGuard puts in the segment (starting or ending in
-    it), keeping points from the segment start onwards. ``mode="legacy"`` uses only contours
-    that start inside the segment, as the original delphinID training features did.
+    Uses every contour in the segment (starting or ending in it), keeping points from the
+    segment start onwards.
 
     Note: PAMGuard compares point times (s) against the segment length in ms, so contour points
-    after the segment end are kept in both modes. This is reproduced so features match PAMGuard.
+    after the segment end are kept. This is reproduced so features match PAMGuard.
     """
-    if mode == "legacy":
-        contours = [c for c in contours if seg_start <= c["start"] < seg_start + seg_len]
     pts = whistle_points(contours, seg_start, min_frag_ms)
     fmin, fmax = freq_range
     nbins = int((fmax - fmin) / WHISTLE_BIN_HZ)

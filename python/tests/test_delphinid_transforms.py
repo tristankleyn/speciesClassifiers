@@ -26,14 +26,9 @@ def test_trim_matches_pamguard_indexing():
     assert len(y) == 160 and y[0] == 53
 
 
-def test_click_spectrum_long_clicks():
-    rng = np.random.default_rng(0)
-    w = rng.normal(size=800)
-    w[700] = 50
-    assert not np.allclose(T.click_power_spectrum(w, 512, mode="pamguard"),
-                           T.click_power_spectrum(w, 512, mode="legacy"))
-    assert np.allclose(T.click_power_spectrum(w[:300], 512, mode="pamguard"),
-                       T.click_power_spectrum(w[:300], 512, mode="legacy"))
+def test_long_clicks_truncated_from_start():
+    w = np.random.default_rng(0).normal(size=800)
+    assert np.allclose(T.click_power_spectrum(w, 512), T.click_power_spectrum(w[:512], 512))
 
 
 def test_segments_include_detections_ending_inside():
@@ -78,6 +73,9 @@ def test_whistle_frames():
 
 # ---------------------------------------------------------------- PAMGuard reference ---
 # Set SC_PAMGUARD_TEST_DATA to PAMGuard's src/test/resources/rawDeepLearningClassifier/DelphinID
+# The reference spectra came from the original training pipeline, which differs from PAMGuard
+# for clicks longer than the FFT and for whistles starting before a frame (see
+# docs/delphinid_features.md), so those frames are skipped.
 REF = os.environ.get("SC_PAMGUARD_TEST_DATA")
 needs_ref = pytest.mark.skipif(not REF, reason="SC_PAMGUARD_TEST_DATA not set")
 
@@ -103,9 +101,9 @@ def test_click_features_match_reference():
     segs = T.segment_starts(st, en, 4, 1, data_start=_datenum_to_s(m["filedate"]))
     n = 0
     for i, (t, idx) in enumerate(segs[: len(ref)]):
-        if len(idx) == 0 or ref[i].sum() == 0:
+        if len(idx) == 0 or ref[i].sum() == 0 or any(len(waves[j]) > 512 for j in idx):
             continue
-        x = T.apply_transforms(T.clicks2spectrum([waves[j] for j in idx], 512, mode="legacy"), transforms, sr)
+        x = T.apply_transforms(T.clicks2spectrum([waves[j] for j in idx], 512), transforms, sr)
         np.testing.assert_allclose(x, ref[i], rtol=1e-5, atol=1e-9)
         n += 1
     assert n > 40
@@ -127,7 +125,12 @@ def test_whistle_features_match_reference():
     en = st + np.array([c["duration"] for c in contours])
     transforms = _pdtf("whistleclassifier.zip", "whistleclassifier")["transforms"]
     segs = T.segment_starts(st, en, 4, 1)  # delphinID segments from the first whistle
+    n = 0
     for k, s in enumerate(r["starttimes"]):
         t, idx = segs[s]
-        spec = T.whistles2spectrum([contours[j] for j in idx], t, 4, (2000, 20000), 200, mode="legacy")
+        if any(st[j] < t for j in idx):
+            continue
+        spec = T.whistles2spectrum([contours[j] for j in idx], t, 4, (2000, 20000), 200)
         np.testing.assert_allclose(T.apply_transforms(spec, transforms), r["spectrumpython"][k], rtol=1e-5, atol=1e-9)
+        n += 1
+    assert n > 30

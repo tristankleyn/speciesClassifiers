@@ -13,7 +13,7 @@ Any other columns that are constant within an event (e.g. ``label``, ``location`
 the frames.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import pandas as pd
@@ -35,8 +35,6 @@ class AcousticParams:
     fft_len         clicks: FFT length for click spectra
     smooth_window   clicks: moving-average window (bins) applied to the averaged spectrum
     downsample      factor to reduce the number of bins by averaging neighbours
-    mode            'pamguard' (match PAMGuard's delphinID module exactly) or 'legacy'
-                    (match the original delphinID training features); see transforms.py
 
     The number of model inputs follows from these: see ``n_bins()``.
     """
@@ -46,19 +44,15 @@ class AcousticParams:
     frame_len: float = 4.0
     hop: float = None
     min_clicks: int = 3
-    min_density: float = 0.1
+    min_density: float = 0.05
     min_frag_ms: float = 200.0
     fft_len: int = 512
     smooth_window: int = 3
     downsample: int = 2
-    mode: str = "pamguard"
-    extra: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if self.voc_type not in ("click", "whistle"):
             raise ValueError("voc_type must be 'click' or 'whistle'")
-        if self.mode not in ("pamguard", "legacy"):
-            raise ValueError("mode must be 'pamguard' or 'legacy'")
         if self.hop is None:
             self.hop = self.frame_len
         self.freq_range = tuple(float(f) for f in self.freq_range)
@@ -146,7 +140,7 @@ def click_frames(clicks: pd.DataFrame, params: AcousticParams, sample_rate: floa
         for t, idx in T.segment_starts(s, s + d["duration"].to_numpy(float), params.frame_len, params.hop):
             if len(idx) < max(params.min_clicks, 1):
                 continue
-            spec = T.clicks2spectrum([waves[i] for i in idx], params.fft_len, mode=params.mode)
+            spec = T.clicks2spectrum([waves[i] for i in idx], params.fft_len)
             x = T.apply_transforms(spec, transforms, sample_rate)
             rows.append(({"event_id": ev, "frame_start": t, "n_detections": len(idx), **info}, x))
     return _feature_frame(rows, params.n_bins(sample_rate))
@@ -177,8 +171,7 @@ def whistle_frames(contours: pd.DataFrame, params: AcousticParams) -> pd.DataFra
             density = T.whistle_density(seg, t, params.frame_len)
             if not density >= params.min_density:
                 continue
-            spec = T.whistles2spectrum(seg, t, params.frame_len, params.freq_range, params.min_frag_ms,
-                                       mode=params.mode)
+            spec = T.whistles2spectrum(seg, t, params.frame_len, params.freq_range, params.min_frag_ms)
             if spec.sum() == 0:
                 continue
             x = T.apply_transforms(spec, transforms)
