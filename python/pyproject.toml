@@ -22,7 +22,11 @@ dependencies = [
 delphinid = ["tensorflow>=2.15"]
 pamguard = ["pypamguard"]
 notebooks = ["jupyter", "matplotlib"]
+app = ["nicegui>=2.0", "matplotlib", "pypamguard"]
 dev = ["pytest"]
+
+[project.scripts]
+speciesclassifiers = "speciesclassifiers.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

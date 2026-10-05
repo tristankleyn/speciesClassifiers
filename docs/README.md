@@ -3,6 +3,7 @@
 | Page | Covers |
 |---|---|
 | [how_it_works.md](how_it_works.md) | One-page overview: how delphinID, random forests and call types work, what they share, thresholds, and monitoring presence over time |
+| [app.md](app.md) | The app: starting it, projects, stages, what each screen does |
 | [data_formats.md](data_formats.md) | Input and output files: annotations, call annotations, contours, frames, feature tables, the standard classifier output, call-type libraries |
 | [delphinid.md](delphinid.md) | delphinID: detection frames, the CNN, grouped cross-validation, export to PAMGuard |
 | [delphinid_features.md](delphinid_features.md) | How delphinID frames match PAMGuard's transforms (and where the original training features differ) |

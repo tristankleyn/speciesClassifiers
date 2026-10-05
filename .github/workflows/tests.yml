@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - run: pip install -e "python[dev,pamguard]"
+      - run: pip install -e "python[dev,pamguard,app]"
       - run: pytest -q python/tests
 
   delphinid:

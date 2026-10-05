@@ -9,7 +9,8 @@ feats = rocca_features(cols, "whistle", omit=[])
 rng = np.random.default_rng(7)
 base = {f: rng.uniform(1, 10) for f in feats}
 hz = {f: 1000 for f in feats if f.startswith("FREQ") and not any(k in f for k in ["RATIO", "SLOPE", "NUM", "PERCENT", "SWEEP", "STEP", "BW", "SPREAD"])}
-species = {"SpeciesA": 0.0, "SpeciesB": 0.25}
+effect = {f: rng.normal(0, 1.0) for f in feats}            # how SpeciesB differs from SpeciesA, per feature
+species = {"SpeciesA": 0.0, "SpeciesB": 1.0}
 rows = []
 for sp, shift in species.items():
     for e in range(8):
@@ -19,7 +20,7 @@ for sp, shift in species.items():
             r.update({"Source": "synthetic", "EncounterID": f"{sp[-1]}{e + 1}", "KnownSpecies": sp, "SamplingRate": 96000,
                       "FREQPEAK": 0, "ClassifiedSpecies": "Ambig"})
             for f in feats:
-                v = base[f] * (1 + shift * (hash(f) % 3 - 1) * 0.3) + ev[f] + rng.normal(0, 2.5)
+                v = base[f] + shift * effect[f] + ev[f] + rng.normal(0, 2.5)
                 r[f] = round(abs(v) * hz.get(f, 1), 4)
             r["FREQMAX"] = max(r["FREQMAX"], 1.0)
             rows.append(r)

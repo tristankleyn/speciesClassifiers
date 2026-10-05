@@ -45,3 +45,6 @@ notebooks/**/frames_*_params.json
 notebooks/**/randomforest_run*/
 notebooks/**/transferlearning_run*/
 notebooks/**/calltypes_run*/
+
+# App launcher (uv)
+python/uv.lock

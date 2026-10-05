@@ -6,6 +6,17 @@ Tools for building acoustic species classifiers from [PAMGuard](https://www.pamg
 
 **New here?** [How the classifiers work](docs/how_it_works.md) (one page, with diagrams) · Documentation: [docs/](docs/README.md) · Data formats: [docs/data_formats.md](docs/data_formats.md)
 
+## Quick start: the app
+
+The app walks you through building a classifier: what data you have, which classifier fits, settings, running (with progress, resumable), results and classifying new data. It runs on your own computer and opens in your browser.
+
+1. Download the repository (green **Code** button → *Download ZIP*, then unzip; or `git clone`).
+2. Double-click **`start_app.bat`** (Windows) or **`start_app.command`** (macOS); on Linux run `./start_app.sh`.
+
+You don't need to install Python: the first start sets up a private copy for the app in the repository folder (a few minutes, needs internet). Already have Python? `pip install -e "python[app]"` then `speciesclassifiers app`. More: [docs/app.md](docs/app.md).
+
+The app covers random forests and call types so far; delphinID and transfer learning are in the notebooks (delphinID training runs in Google Colab, so you don't need to install TensorFlow).
+
 ## What's here
 
 | Module | What it does | Python | R |
@@ -42,6 +53,7 @@ schemas/                Shared data formats
 examples/               Small example data
 docs/                   Documentation and roadmap
 tools/                  run_notebooks.py (notebook smoke test, used by CI)
+start_app.*             App launchers (Windows .bat, macOS .command, Linux .sh)
 .github/workflows/      Tests on every push: Python 3.10 and 3.12, delphinID + notebooks, R package + Quarto notebooks
 ```
 
