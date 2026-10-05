@@ -322,3 +322,28 @@ def self_check(result, lib):
     return {"same_cluster": float(np.mean(ids[m] == cl[m])), "became_unassigned": float(np.mean(ids[m] == -1)),
             "unclustered_stay_unassigned": float(np.mean(ids[~m] == -1)) if (~m).any() else np.nan,
             "scaler_matches": bool(np.allclose(standardise(result["windows"], lib), st["Xs"], atol=1e-8))}
+
+
+def standard_output(windows, lib, event_col=None, classifier_prefix="calltypes"):
+    """Classified windows -> the standard classifier output (one classifier per label task), so call-type
+    clusters can feed ``transferlearning``. A window's probability of the positive label is its cluster's
+    (shrunk) share of that label; unassigned windows are left out. ``event_col``: window column to use as
+    ``event_id`` (default: the UTC day)."""
+    byid = {c["id"]: c for c in lib["clusters"]}
+    w = windows[windows["cluster"] >= 0]
+    det = [f"w{t:.3f}" for t in w["w_start"]]
+    ev = w[event_col].astype(str).to_numpy() if event_col else \
+        pd.to_datetime(w["w_start"], unit="s", utc=True).dt.strftime("%Y%m%d").to_numpy()
+    time = pd.to_datetime(w["w_start"], unit="s", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ").to_numpy()
+    rows = []
+    for t in lib["tasks"]:
+        p = np.array([byid[c]["verdicts"][t["name"]]["p_positive"] for c in w["cluster"]], float)
+        for cls, prob in ((t["positive"], p), (t["negative"], 1 - p)):
+            rows.append(pd.DataFrame({"detection_id": det, "event_id": ev, "time": time,
+                                      "classifier": f"{classifier_prefix}-{t['name']}", "voc_type": "whistle",
+                                      "class": cls, "probability": prob, "cluster": w["cluster"].to_numpy()}))
+    cols = ["detection_id", "event_id", "time", "classifier", "voc_type", "class", "probability", "cluster"]
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    return pd.concat(rows, ignore_index=True).sort_values(["classifier", "detection_id", "class"],
+                                                          ignore_index=True)

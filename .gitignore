@@ -44,3 +44,4 @@ notebooks/**/frames_*.csv
 notebooks/**/frames_*_params.json
 notebooks/**/randomforest_run*/
 notebooks/**/transferlearning_run*/
+notebooks/**/calltypes_run*/

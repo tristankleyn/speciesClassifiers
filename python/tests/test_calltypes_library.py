@@ -13,7 +13,7 @@ pytest.importorskip("sklearn")
 from speciesclassifiers.calltypes import (ContourParams, DiscoverParams, LabelTask, ReliabilityParams, WindowParams,
                                           build_library, check_rules, classify_contours, discover, discovery_pool,
                                           label_windows, load_library, make_windows, prepare_contours, save_library,
-                                          self_check, window_features, with_rules)
+                                          self_check, standard_output, window_features, with_rules)
 from speciesclassifiers.calltypes import standalone
 from speciesclassifiers.io import read_annotations
 
@@ -101,3 +101,13 @@ def test_check_rules():
         check_rules([{"if": "unknown", "op": "<", "value": 1, "then": "x"}])
     with pytest.raises(ValueError):
         check_rules([{"if": "n_windows", "op": "~", "value": 1, "then": "x"}])
+
+
+def test_standard_output(built):
+    from speciesclassifiers.outputs import validate_output
+    raw, _, lib = built
+    w, _, _ = classify_contours(pd.DataFrame([x for x in raw if x["start"] >= DAY4]), lib)
+    out = standard_output(w, lib)
+    validate_output(out)
+    assert set(out["classifier"]) == {"calltypes-species", "calltypes-ecotype"}
+    assert out["detection_id"].nunique() == (w["cluster"] >= 0).sum()

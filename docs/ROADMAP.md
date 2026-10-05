@@ -20,19 +20,6 @@ Built in small chunks. Each chunk ends with working, tested code.
 | 10b | `calltypes`: evaluate how well labelled call types separate (grouped RF CV; matches the original on 3 annotated days) | Py | ✅ |
 | 10c | `calltypes`: discover (hybrid clustering, cluster summaries, user-defined binary label verdicts, leave-one-day-out, decision blocks; matches the original exactly on 3 annotated days) | Py | ✅ |
 | 10d | `calltypes`: frozen library (JSON), reference classifier + numpy-only `standalone.py` (identical results), clock-aligned decision blocks with user-defined rules and task dependencies, notebook `05_calltypes` with a synthetic example | Py | ✅ |
-| 11 | Docs, examples, CI | – | |
+| 11 | Docs (`docs/`), example data notes + generator scripts, GitHub Actions (Python 3.10/3.12, delphinID + notebooks, R package + Quarto notebooks), call-type windows in the standard output format | – | ✅ |
 
-## delphinID parameters
-
-- **Acoustic** (`AcousticParams`): frequency range, frame length and hop, `min_clicks` / `min_density`, minimum whistle fragment, FFT length, smoothing, downsampling. The number of model inputs follows from these.
-- **CNN** (`CNNParams`; shape fixed: Conv1D → MaxPool → Conv1D → MaxPool → LeakyReLU → Dense → Dropout → softmax): filters, kernel size, max pool, LeakyReLU slope, dense size, dropout, L2
-- **Training** (`TrainingParams`): learning rate, epochs per bootstrap, batch size, patience, seed
-- **Grouped resampling** (`ResamplingParams`): `max_per_group` (cap on examples per group in each bootstrap, default 30) and `n_bootstraps` (resamples per fold, default 5)
-- **Cross-validation**: leave-one-group-out by default; `n_folds` groups the test groups into folds for large datasets
-
-Defaults reproduce the published models; loading their weights into `build_model` gives identical predictions.
-
-## Running delphinID without installing TensorFlow
-
-- Google Colab: the notebook opens in Colab with TensorFlow preinstalled; users upload data and download the PAMGuard zip.
-- Local: `pip install "speciesclassifiers[delphinid]"` in a fresh environment. The models are small, so CPU is enough.
+Module documentation: [docs/README.md](README.md).
