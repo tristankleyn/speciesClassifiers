@@ -25,6 +25,7 @@ User-facing workflows live in `notebooks/` (Jupyter for Python, Quarto for R). E
 | `notebooks/python/02_train_delphinID.ipynb` | Frames → cross-validation → final model → PAMGuard zip (runs in Google Colab too) |
 | `notebooks/python/03_randomforest.ipynb`, `notebooks/R/03_randomforest.qmd` | Random forest from scratch on ROCCA contour stats or any feature table |
 | `notebooks/python/04_transferlearning.ipynb`, `notebooks/R/04_transferlearning.qmd` | Event classifiers for new labels, retrained on any base classifiers' outputs (e.g. delphinID predictions in a PAMGuard database) |
+| `notebooks/python/05_calltypes.ipynb` | Whistle contours + call annotations → windows → call-type evaluation → discovery (clusters + label verdicts) → frozen library → decision blocks for new data; `calltypes/standalone.py` classifies with numpy only |
 
 Notebooks 02–04 run straight away on synthetic examples in `examples/`.
 

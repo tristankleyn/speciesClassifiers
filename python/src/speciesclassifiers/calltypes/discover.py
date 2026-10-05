@@ -421,7 +421,7 @@ def discover(pool, params: DiscoverParams = None, tasks=(), rp: ReliabilityParam
 
     Returns a dict: ``windows`` (with ``cluster``), ``summary`` (per cluster, incl. verdicts),
     ``reliability``, ``examples``, ``loo_by_day``, ``loo_summary``, ``decision_windows``, ``scorecard``,
-    ``calltype_by_cluster``, and ``state`` (feature spec, scaler, weights, thresholds: what the library
+    ``calltype_by_cluster``, ``params``, and ``state`` (feature spec, scaler, weights, thresholds: what the library
     needs).
     """
     params = params or DiscoverParams()
@@ -450,4 +450,4 @@ def discover(pool, params: DiscoverParams = None, tasks=(), rp: ReliabilityParam
     state = {**state, "spec": spec, "X": X}
     return {"windows": w, "summary": summ, "reliability": rel, "examples": examples, "loo_by_day": loo_day,
             "loo_summary": loo_all, "decision_windows": dwp, "scorecard": sc,
-            "calltype_by_cluster": pd.crosstab(lab["label"], lab["cluster"]), "state": state}
+            "calltype_by_cluster": pd.crosstab(lab["label"], lab["cluster"]), "state": state, "params": params}
