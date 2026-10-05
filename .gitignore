@@ -42,3 +42,4 @@ Thumbs.db
 notebooks/**/delphinID_run*/
 notebooks/**/frames_*.csv
 notebooks/**/frames_*_params.json
+notebooks/**/randomforest_run*/

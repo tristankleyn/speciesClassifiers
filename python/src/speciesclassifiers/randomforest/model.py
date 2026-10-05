@@ -94,7 +94,7 @@ class RandomForestModel:
         self.forest = BalancedRandomForestClassifier(
             n_estimators=p.n_trees, max_features=mtry, min_samples_leaf=p.node_size,
             sampling_strategy="all", replacement=True, bootstrap=False,
-            random_state=p.seed, n_jobs=-1)
+            random_state=p.seed, n_jobs=-1 if len(df) > 5000 else 1)  # threads only pay off on big data
         self.forest.fit(x.fillna(self.medians).to_numpy(), df[self.label_col].astype(str).to_numpy())
         order = [list(self.forest.classes_).index(c) for c in self.classes]
         self._order = order
@@ -240,4 +240,4 @@ def predict(model: RandomForestModel, df, group_col="event_id", classifier="rand
         raise ValueError(f"New data is missing features the model uses: {missing}")
     p = model.predict_proba(df)
     d = detection_output(df, p, model.classes, classifier, voc_type, None, id_col, group_col, time_col)
-    return d, group_predictions(d, min_score, group_col)
+    return d, group_predictions(d, min_score)  # groups are in the output's event_id column

@@ -1,0 +1,207 @@
+---
+title: "3 · Random forest classifier from scratch"
+format: html
+editor: visual
+---
+
+Trains and tests a random forest that classifies detections (e.g. whistle contours) by their measured features, then classifies whole groups (encounters) by averaging the detection predictions. This is the R version of `notebooks/python/03_randomforest.ipynb`; both use the same settings and write the same outputs.
+
+**Input**, either:
+
+-   **ROCCA contour stats** exported by PAMGuard's ROCCA module (`RoccaContourStats*.csv`): a single file, a folder of them, or a folder hierarchy where folder names give labels (e.g. `species/location/encounter/`); or
+-   **any detection table** (CSV) with a label column, a group column and numeric feature columns.
+
+**Output** in `output_dir`:
+
+-   detection predictions from cross-validation (standard classifier output format, usable for transfer learning)
+-   group predictions and an accuracy summary
+-   the trained model (`.rds`) for classifying new data
+
+By default the notebook runs on a small **synthetic** ROCCA-format example (`examples/RoccaContourStats_example_synthetic.csv`).
+
+**How it works**
+
+-   *Training sample*: each group (encounter) contributes at most `max_per_group` random detections, so long encounters don't dominate. Optionally, the `prune` share of each class's detections furthest from the class centre are dropped as outliers.
+-   *Balanced trees*: every tree is grown on the same number of detections from each class (the size of the smallest class), so common classes aren't favoured.
+-   *Testing*: leave-one-group-out, where each group is predicted by a forest trained on all the others.
+-   *Decision score*: for a prediction with top probability p1 and runner-up p2, score = p1 × (p1 − p2). Low-scoring detections can be left out of group predictions (`min_score`), and low-scoring groups can be discarded (`min_group_score`).
+
+## Setup
+
+Install the package once from the repository folder: `install.packages("R/speciesClassifiers", repos = NULL, type = "source")` (it needs `randomForest`).
+
+```{r}
+#| message: false
+library(speciesClassifiers)
+```
+
+## Load data
+
+```{r}
+# --- Data -----------------------------------------------------------------------------------
+data_type  <- "rocca"     # "rocca" (RoccaContourStats CSVs) or "table" (any detection table CSV)
+data_path  <- "../../examples/RoccaContourStats_example_synthetic.csv"   # file or folder
+voc_type   <- "whistle"   # rocca only: "whistle" or "click"
+levels     <- NULL        # rocca folder hierarchy: column per folder level, e.g. c("label", "location", "event_id")
+                          # NULL = labels from the CSV's KnownSpecies / EncounterID columns
+label_col  <- "label"     # table only: column with the class
+group_col  <- "event_id"  # independent unit for testing (encounter, location, ...)
+omit_vars  <- NULL        # features to leave out, e.g. c("DURATION"); NULL = defaults
+filter_min <- list()      # e.g. list(DURATION = 0.1, FREQMEAN = 1000): drop rows below
+filter_max <- list()      # e.g. list(DURATION = 5): drop rows above
+subset_by  <- list()      # keep only some values, e.g. list(label = c("Dde", "Ttr"), location = "Site A")
+output_dir <- "randomforest_run"
+
+if (data_type == "rocca") {
+  r <- read_rocca(data_path, voc_type, levels, omit_vars, filter_min, filter_max)
+  label_col <- "label"
+} else {
+  r <- read_feature_table(data_path, label_col, group_col, exclude = if (is.null(omit_vars)) character() else omit_vars)
+  for (v in names(filter_min)) r$data <- r$data[r$data[[v]] >= filter_min[[v]], ]
+  for (v in names(filter_max)) r$data <- r$data[r$data[[v]] <= filter_max[[v]], ]
+}
+data <- r$data
+features <- r$features
+for (v in names(subset_by)) data <- data[data[[v]] %in% subset_by[[v]], ]
+data[[label_col]] <- as.character(data[[label_col]])
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+cat(sprintf("%d detections, %d groups, %d features\n", nrow(data), length(unique(data[[group_col]])), length(features)))
+data.frame(groups = tapply(data[[group_col]], data[[label_col]], function(x) length(unique(x))),
+           detections = as.vector(table(data[[label_col]])))
+```
+
+Average of each feature per class:
+
+```{r}
+round(t(sapply(split(data[features], data[[label_col]]), colMeans)), 2)
+```
+
+## Explore
+
+Scatter of two features (or a histogram of one), coloured by class.
+
+```{r}
+#| fig-width: 7
+#| fig-height: 5
+variable1 <- features[1]   # e.g. "FREQBEG"
+variable2 <- features[2]   # e.g. "FREQEND"; NULL for a histogram of variable1
+
+labs <- sort(unique(data[[label_col]]))
+cols <- grDevices::hcl.colors(length(labs), "Dark 3")
+if (!is.null(variable2)) {
+  plot(data[[variable1]], data[[variable2]], col = adjustcolor(cols[match(data[[label_col]], labs)], 0.6),
+       pch = 16, cex = 0.8, xlab = variable1, ylab = variable2)
+} else {
+  br <- pretty(data[[variable1]], 30)
+  hist(data[[variable1]][data[[label_col]] == labs[1]], breaks = br, col = adjustcolor(cols[1], 0.5),
+       main = "", xlab = variable1)
+  for (i in seq_along(labs)[-1]) hist(data[[variable1]][data[[label_col]] == labs[i]], breaks = br,
+                                      col = adjustcolor(cols[i], 0.5), add = TRUE)
+}
+legend("topleft", labs, col = cols, pch = 16, bty = "n")
+```
+
+## Train and test
+
+```{r}
+n_trees       <- 500    # trees in the forest
+mtry          <- NULL   # features tried per split; NULL = square root of the number of features
+node_size     <- 25     # minimum detections per leaf (larger = simpler trees)
+max_per_group <- 25     # most detections per group used for training
+prune         <- 0      # share (0-1) of each class's training detections to drop as outliers
+seed          <- 42
+omit_groups   <- c()    # groups to leave out entirely
+
+params <- rf_params(n_trees, mtry, node_size, max_per_group, prune, seed)
+use <- data[!data[[group_col]] %in% omit_groups, ]
+preds <- rf_cross_validate(use, features, label_col, group_col, params, voc_type = voc_type)
+write.csv(preds, file.path(output_dir, "cv_detection_predictions.csv"), row.names = FALSE)
+```
+
+## Results
+
+`min_score` drops low-scoring detections before averaging; `min_group_score` discards low-scoring groups (more confident, fewer classified).
+
+```{r}
+min_score <- 0.02
+min_group_score <- 0
+
+s <- rf_summarise(preds, min_score, min_group_score)
+write.csv(s$groups, file.path(output_dir, "cv_group_predictions.csv"), row.names = FALSE)
+cat(sprintf("Group accuracy: %.1f%%   Mean class accuracy: %.1f%%   Groups discarded: %.1f%%\n",
+            100 * s$group_accuracy, 100 * s$mean_class_accuracy, 100 * s$groups_discarded))
+round(s$accuracy_by_class, 2)
+s$confusion
+```
+
+Groups in detail, misclassified first:
+
+```{r}
+g <- transform(s$groups, correct = predicted == true_class)
+g[order(g$correct, g$score), c("event_id", "true_class", "predicted", "correct", "score", "n", "n_total")]
+```
+
+Accuracy against the group score threshold: how much accuracy you gain by discarding less confident groups.
+
+```{r}
+#| fig-width: 7
+#| fig-height: 4
+curve <- rf_threshold_curve(preds)
+plot(curve$threshold, curve$group_accuracy, type = "l", ylim = c(0, 1.05), lwd = 2,
+     xlab = "Minimum group score", ylab = "")
+lines(curve$threshold, curve$mean_class_accuracy, col = 2, lwd = 2)
+lines(curve$threshold, curve$groups_kept, lty = 2, col = 3, lwd = 2)
+legend("bottomleft", c("group accuracy", "mean class accuracy", "groups kept"), col = 1:3, lty = c(1, 1, 2), bty = "n")
+```
+
+## Final model
+
+Trained on all the data with the same settings, saved for classifying new data. Feature importance shows which measurements the forest relies on most.
+
+```{r}
+#| fig-width: 6
+#| fig-height: 5
+model <- rf_fit(use, features, label_col, group_col, params)
+rf_save(model, file.path(output_dir, "randomforest_model.rds"))
+imp <- rf_importance(model)
+par(mar = c(4, 14, 2, 1))
+barplot(rev(utils::head(imp, 15)), horiz = TRUE, las = 1, xlab = "Mean decrease in Gini impurity",
+        main = "Top 15 features")
+```
+
+## Classify new data
+
+Load new detections in the same way and apply a saved model. New data need the same feature columns. `new_group_col` groups the detections for group predictions (e.g. by encounter or recording); in the outputs, groups are in the `event_id` column.
+
+```{r}
+run_new <- FALSE
+new_path <- "path/to/new/RoccaContourStats.csv"
+new_group_col <- "event_id"
+model_path <- file.path(output_dir, "randomforest_model.rds")
+
+if (run_new) {
+  m <- rf_load(model_path)
+  new <- if (data_type == "rocca") read_rocca(new_path, voc_type, levels, omit_vars)$data else
+    read_feature_table(new_path, label_col, new_group_col)$data
+  res <- rf_predict(m, new, group_col = new_group_col, voc_type = voc_type, min_score = min_score)
+  write.csv(res$detections, file.path(output_dir, "new_detection_predictions.csv"), row.names = FALSE)
+  write.csv(res$groups, file.path(output_dir, "new_group_predictions.csv"), row.names = FALSE)
+  res$groups
+}
+```
+
+Classification probabilities through one group, detection by detection:
+
+```{r}
+#| fig-width: 8
+#| fig-height: 3.5
+if (run_new) {
+  group <- res$groups$event_id[1]
+  d <- res$detections[res$detections$event_id == group, ]
+  w <- reshape(d[c("detection_id", "class", "probability")], idvar = "detection_id", timevar = "class", direction = "wide")
+  matplot(as.matrix(w[-1]), type = "o", pch = 16, cex = 0.6, lty = 1, xlab = "Detection", ylab = "Probability",
+          main = group, col = seq_len(ncol(w) - 1))
+  legend("topright", sub("probability.", "", names(w)[-1]), col = seq_len(ncol(w) - 1), lty = 1, bty = "n")
+}
+```

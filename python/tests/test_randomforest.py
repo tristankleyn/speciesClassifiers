@@ -73,3 +73,11 @@ def test_real_rocca_file():
     assert len(feats) > 30 and d["event_id"].nunique() > 5
     preds = cross_validate(d, feats, params=RFParams(n_trees=100), progress=False)
     assert summarise(preds)["group_accuracy"] > 0.6
+
+
+def test_predict_other_group_column():
+    d, feats = read_feature_table(_data())
+    d["recording"] = d["event_id"] + "_rec"
+    m = fit(d, feats, params=RFParams(n_trees=20, node_size=5))
+    det, grp = predict(m, d, group_col="recording")
+    assert set(grp["event_id"]) == set(d["recording"])

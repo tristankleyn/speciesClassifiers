@@ -23,7 +23,7 @@ User-facing workflows live in `notebooks/` (Jupyter for Python, Quarto for R). E
 |---|---|
 | `notebooks/python/01_make_frames.ipynb` | PAMGuard binaries + annotations CSV → delphinID detection frames |
 | `notebooks/python/02_train_delphinID.ipynb` | Frames → cross-validation → final model → PAMGuard zip (runs in Google Colab too) |
-| `notebooks/python/03_randomforest.ipynb` | Random forest from scratch on ROCCA contour stats or any feature table |
+| `notebooks/python/03_randomforest.ipynb`, `notebooks/R/03_randomforest.qmd` | Random forest from scratch on ROCCA contour stats or any feature table |
 
 Notebooks 02 and 03 run straight away on synthetic examples in `examples/`.
 

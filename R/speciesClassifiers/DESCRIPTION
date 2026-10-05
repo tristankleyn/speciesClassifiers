@@ -7,7 +7,9 @@ Description: Random forest and transfer-learning classifiers for acoustic specie
 License: MIT + file LICENSE
 Encoding: UTF-8
 Imports:
-    stats
+    stats,
+    utils,
+    randomForest
 Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
