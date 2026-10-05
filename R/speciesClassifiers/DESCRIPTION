@@ -4,6 +4,7 @@ Version: 0.0.1
 Authors@R: person("Tristan", "Kleyn", email = "tristankleyn@gmail.com", role = c("aut", "cre"))
 Description: Random forest and transfer-learning classifiers for acoustic species
     identification from PAMGuard detections, sharing a standard classifier output format.
+License: MIT + file LICENSE
 Encoding: UTF-8
 Imports:
     stats

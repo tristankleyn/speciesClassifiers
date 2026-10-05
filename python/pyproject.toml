@@ -7,6 +7,7 @@ name = "speciesclassifiers"
 version = "0.0.1"
 description = "Build acoustic species classifiers from PAMGuard detections"
 requires-python = ">=3.10"
+license = { text = "MIT" }
 authors = [{ name = "Tristan Kleyn", email = "tristankleyn@gmail.com" }]
 dependencies = [
     "numpy",
