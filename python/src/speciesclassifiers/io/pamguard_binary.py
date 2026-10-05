@@ -3,7 +3,8 @@
 Click and whistle tables have the columns ``delphinid.click_frames`` / ``whistle_frames`` expect:
 
 - clicks:   ``start`` (s, Unix time), ``duration`` (s), ``wave`` (channel 0), ``uid``, ``file``
-- whistles: ``start``, ``duration``, ``times`` (s, per slice), ``freqs`` (Hz, per slice), ``uid``, ``file``
+- whistles: ``start``, ``duration``, ``times`` (s, per slice), ``freqs`` (Hz, per slice), ``slice_s``,
+  ``snr_db`` (20 log10 signal/noise), ``amplitude_db``, ``uid``, ``file``
 
 Binaries don't store the sample rate or the whistle detector's FFT settings, so these are
 worked out from the detections in each file (see ``infer_sample_rate``, ``infer_fft``) unless
@@ -146,14 +147,20 @@ def read_whistles(folder, periods=None, sample_rate=None, fft_len=None, fft_hop=
         rates.append(sr), hops.append(hop), ffts.append(fl)
         for d in pf.data:
             sl = np.asarray(d.slice_numbers, float)
+            sig = float(d.signal) if getattr(d, "signal", None) is not None else np.nan
+            noi = float(d.noise) if getattr(d, "noise", None) is not None else np.nan
             rows.append({"start": d.millis / 1000.0, "duration": d.sample_duration / sr,
                          "times": sl * hop / sr, "freqs": np.asarray(d.contour, float) * sr / fl,
+                         "slice_s": hop / sr,
+                         "snr_db": 20 * np.log10(sig / noi) if sig > 0 and noi > 0 else np.nan,
+                         "amplitude_db": float(d.amplitude) if getattr(d, "amplitude", None) is not None else np.nan,
                          "uid": d.uid, "file": f.name})
         if progress and (k + 1) % 50 == 0:
             print(f"  read {k + 1}/{len(files)} files")
     settings = {"sample_rate": _consensus([r for r in rates if r], "sample rate"),
                 "fft_hop": _consensus(hops, "FFT hop"), "fft_len": _consensus(ffts, "FFT length")}
-    return pd.DataFrame(rows, columns=["start", "duration", "times", "freqs", "uid", "file"]), settings
+    cols = ["start", "duration", "times", "freqs", "slice_s", "snr_db", "amplitude_db", "uid", "file"]
+    return pd.DataFrame(rows, columns=cols), settings
 
 
 def _consensus(values, what):
