@@ -2,9 +2,10 @@
 
 from .crossval import (ResamplingParams, cross_validate, event_predictions, fit_bootstrapped,
                        summarise)
+from .export import export_pamguard, load_pamguard_zip
 from .frames import AcousticParams, click_frames, whistle_frames
 from .model import CNNParams, TrainingParams, build_model, one_hot, predict, train
 
 __all__ = ["AcousticParams", "click_frames", "whistle_frames",
            "CNNParams", "TrainingParams", "build_model", "one_hot", "predict", "train",
-           "ResamplingParams", "fit_bootstrapped", "cross_validate", "event_predictions", "summarise"]
+           "export_pamguard", "load_pamguard_zip", "ResamplingParams", "fit_bootstrapped", "cross_validate", "event_predictions", "summarise"]

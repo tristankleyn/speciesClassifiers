@@ -8,8 +8,8 @@ Built in small chunks. Each chunk ends with working, tested code.
 | 2 | delphinID feature transforms: whistle and click detection frames, ported from PAMGuard's Java transforms and checked against PAMGuard's test files | Py | ✅ |
 | 3 | delphinID model builder: fixed CNN shape, grouped parameters (acoustic / CNN / training) | Py | ✅ |
 | 4 | delphinID grouped cross-validation: leave-one-group-out, bootstrapped train/val subsamples capped per group | Py | ✅ |
-| 5 | delphinID export to PAMGuard (SavedModel + `delphinID.pdtf`, zipped) | Py | ⏳ |
-| 6 | delphinID notebook (runs locally or in Google Colab) | Py | |
+| 5 | delphinID export to PAMGuard (SavedModel + `delphinID.pdtf`, zipped) — awaiting PAMGuard load test | Py | ✅ |
+| 6 | delphinID notebook (runs locally or in Google Colab) | Py | ⏳ |
 | 7 | `io`: read PAMGuard databases / binaries into standard tables | Py + R | |
 | 8 | `randomforest`: from scratch on detection features (from ClassifyStuff `Classify-rocca`) | Py + R | |
 | 9 | `transferlearning`: event classifiers on standard outputs (from ClassifyStuff `Classify-delphinID`) | Py + R | |
