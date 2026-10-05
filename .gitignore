@@ -1,0 +1,38 @@
+# Data: never commit recordings, detections or databases
+*.wav
+*.pgdf
+*.pgdx
+*.pgnf
+*.sqlite3
+*.sqlite
+*.xlsx
+data/
+pipeline_cache/
+pipeline_runs/
+# Except small example data
+!examples/**
+
+# Trained models (publish as release assets instead)
+models/
+*.keras
+*.h5
+*.rds
+
+# Python
+__pycache__/
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+build/
+dist/
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*_files/
+*.html
+
+# OS
+.DS_Store
+Thumbs.db

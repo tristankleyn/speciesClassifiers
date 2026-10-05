@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speciesclassifiers"
+version = "0.0.1"
+description = "Build acoustic species classifiers from PAMGuard detections"
+requires-python = ">=3.10"
+authors = [{ name = "Tristan Kleyn", email = "tristankleyn@gmail.com" }]
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn>=1.3",
+]
+
+[project.optional-dependencies]
+delphinid = ["tensorflow>=2.15"]
+pamguard = ["pypamguard"]
+notebooks = ["jupyter", "matplotlib"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
