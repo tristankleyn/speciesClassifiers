@@ -29,16 +29,29 @@ STATE_ICON = {"done": ("check_circle", "text-green-600"), "outdated": ("update",
 STATE_TEXT = {"done": "done", "outdated": "settings changed: will rerun", "failed": "failed",
               "pending": "not run yet", "running": "running", "skipped": "skipped (not set up)"}
 
-GUIDE = [
-    ("Measurements of individual detections (e.g. PAMGuard ROCCA contour stats, or any table of detection "
-     "features) from encounters of known species", "randomforest"),
-    ("Whistle contours (PAMGuard Whistle and Moan Detector) with some calls annotated by type, and labels such as "
-     "species or population to tell apart", "calltypes"),
-    ("Labelled encounters, and I want a delphinID deep-learning model to run in PAMGuard", "delphinid"),
-    ("Outputs of classifiers I already have (e.g. delphinID in a PAMGuard database), to retrain for new labels",
-     "transferlearning"),
+METHODS = [   # (key, title, icon, one-sentence caption, requirements)
+    ("randomforest", "Create Random Forest Classifier", "forest",
+     "Classifies species from measurements of individual detections, combined per encounter.",
+     ["**Detections**: PAMGuard ROCCA contour stats (`RoccaContourStats*.csv`, a file or folder), or any CSV "
+      "with one row per detection and numeric feature columns",
+      "**Labels**: the class of each detection (ROCCA: `KnownSpecies`; other CSVs: a label column)",
+      "**Groups**: the encounter each detection belongs to (ROCCA: `EncounterID`; other CSVs: a group column), "
+      "with at least 2 encounters per class"]),
+    ("delphinid", "Create Deep Learning Classifier", "psychology",
+     "Trains a delphinID neural network on averaged spectra of whistles or clicks, to run in PAMGuard.",
+     ["**Detections**: PAMGuard binary files from the Whistle and Moan Detector (whistles) or Click Detector "
+      "(clicks)",
+      "**Annotations**: a CSV of labelled encounter periods: `event_id, label, start, end` (UTC)",
+      "**Encounters**: several per class, for testing on encounters the model hasn't seen",
+      "**TensorFlow**: installed locally, or train in Google Colab (no install)"]),
+    ("calltypes", "Create Clustering Classifier (call types)", "hub",
+     "Groups whistle contours into call types and learns which labels (e.g. species) each call type indicates.",
+     ["**Detections**: a folder of PAMGuard Whistle and Moan Detector binary files (or a contours JSON)",
+      "**Call annotations**: a CSV with one row per call: `event_id, label` (call type, or `untyped`), "
+      "`start, end` (UTC), plus optional label columns such as `species`; or annotation tables",
+      "**Days**: annotated calls from at least 2 days; days without annotations can be included too"]),
 ]
-COMING = {"delphinid": "delphinID isn't in the app yet: use notebooks 01_make_frames and 02_train_delphinID "
+COMING = {"delphinid": "Not in the app yet: use notebooks 01_make_frames and 02_train_delphinID "
                        "(02 runs in Google Colab, so no TensorFlow install is needed).",
           "transferlearning": "Transfer learning isn't in the app yet: use notebook 04_transferlearning "
                               "(Python or R)."}
@@ -103,11 +116,36 @@ def home():
 
 
 async def new_project_dialog(classifier=None):
+    state = {"choice": classifier}
     with ui.dialog() as dialog, ui.card().classes("w-[48rem] max-w-full"):
         ui.label("New project").classes("text-xl font-medium")
-        ui.label("What do you have?").classes("font-medium")
-        choice = ui.radio({c: text for text, c in GUIDE}, value=classifier).props("dense")
-        note = ui.label().classes("text-sm")
+        ui.label("Choose a method").classes("text-sm text-gray-600")
+
+        @ui.refreshable
+        def methods():
+            for key, title, icon, caption, reqs in METHODS:
+                chosen = state["choice"] == key
+                card = ui.card().classes("w-full cursor-pointer p-3 " + (
+                    "border-2 border-blue-500 bg-blue-50" if chosen else "border border-gray-200 hover:bg-slate-50"))
+                card.props("flat")
+                card.on("click", lambda key=key: choose(key))
+                with card:
+                    with ui.row().classes("items-center gap-3 no-wrap"):
+                        ui.icon(icon, size="md").classes("text-blue-600" if chosen else "text-gray-500")
+                        with ui.column().classes("gap-0"):
+                            ui.label(title).classes("font-medium")
+                            ui.label(caption).classes("text-sm text-gray-600")
+                    if chosen:
+                        ui.label("What you need").classes("text-sm font-medium mt-2")
+                        ui.markdown("\n".join(f"- {r}" for r in reqs)).classes("text-sm")
+                        if key in COMING:
+                            ui.label(COMING[key]).classes("text-sm text-amber-700")
+
+        def choose(key):
+            state["choice"] = key
+            methods.refresh()
+            update()
+        methods()
         name = ui.input("Project name", value="my classifier").classes("w-96")
         with ui.row().classes("items-center w-full no-wrap"):
             parent = ui.input("Create it in folder", value=str(DEFAULT_PARENT)).classes("grow")
@@ -122,24 +160,14 @@ async def new_project_dialog(classifier=None):
             create = ui.button("Create", icon="add")
 
         def update():
-            c = choice.value
-            if c in COMING:
-                note.text = COMING[c]
-                note.classes(replace="text-sm text-amber-700")
-                create.disable()
-            elif c:
-                note.text = f"→ {WORKFLOWS[c].title}: {WORKFLOWS[c].description}"
-                note.classes(replace="text-sm text-slate-700")
-                create.enable()
-            else:
-                create.disable()
-        choice.on_value_change(update)
+            c = state["choice"]
+            create.set_enabled(bool(c) and c not in COMING)
         update()
 
         def do_create():
             folder = Path(parent.value).expanduser() / name.value.strip()
             try:
-                p = Project.create(folder, choice.value, name=name.value.strip())
+                p = Project.create(folder, state["choice"], name=name.value.strip())
             except Exception as e:
                 ui.notify(str(e), type="negative")
                 return
