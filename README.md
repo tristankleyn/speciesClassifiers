@@ -15,7 +15,7 @@ The app walks you through building a classifier: what data you have, which class
 
 You don't need to install Python: the first start sets up a private copy for the app in the repository folder (a few minutes, needs internet). Already have Python? `pip install -e "python[app]"` then `speciesclassifiers app`. More: [docs/app.md](docs/app.md).
 
-The app covers random forests and call types so far; delphinID and transfer learning are in the notebooks (delphinID training runs in Google Colab, so you don't need to install TensorFlow).
+The app covers random forests, delphinID and call types; transfer learning is in the notebooks. delphinID needs TensorFlow: the app checks for it and offers to install it, or to train in Google Colab instead (nothing to install).
 
 ## What's here
 

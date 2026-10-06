@@ -381,4 +381,154 @@ CALLTYPES = Workflow(
     ct_defaults, ct_example)
 
 
-WORKFLOWS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES}
+# ============================================================================ delphinID =============
+def dl_defaults():
+    from speciesclassifiers.delphinid import CNNParams, TrainingParams
+    return {
+        "data": {"source": "binaries", "binary_folder": "", "annotations": "", "voc_type": "whistle",
+                 "sample_rate": None, "frames_csv": "", "frames_params": ""},
+        "labels": {"classes": [], "group_col": "event_id"},
+        "settings": {
+            "acoustic": {"fmin_hz": 2000.0, "fmax_hz": 20000.0, "frame_len": 4.0, "hop": 4.0, "downsample": 2,
+                         "min_density": 0.05, "min_frag_ms": 200.0, "min_clicks": 3, "fft_len": 512,
+                         "smooth_window": 3},
+            "cnn": CNNParams().to_dict(),
+            "training": TrainingParams().to_dict(),
+            "resampling": {"max_per_group": 30, "n_bootstraps": 5},
+            "crossval": {"run": True, "n_folds": None},
+        },
+        "model_name": "delphinID_whistles",
+    }
+
+
+def dl_example():
+    return {"data": {"source": "frames", "frames_csv": str(EXAMPLES / "frames_example_synthetic.csv"),
+                     "frames_params": str(EXAMPLES / "frames_example_synthetic_params.json")},
+            "settings": {"training": {"epochs": 10}, "resampling": {"n_bootstraps": 2},
+                         "crossval": {"run": True, "n_folds": 4}},
+            "model_name": "delphinID_example"}
+
+
+def require_tensorflow():
+    from .checks import tensorflow_status
+    st = tensorflow_status()
+    if not st["ok"]:
+        raise RuntimeError(st["message"] + " In the app: Run > Install TensorFlow, or train in Google Colab "
+                           "(Run > Train in Google Colab). Otherwise: pip install \"speciesclassifiers[delphinid]\"")
+
+
+def dl_acoustic(cfg):
+    from speciesclassifiers.delphinid import AcousticParams
+    a = dict(cfg["settings"]["acoustic"])
+    fr = (float(a.pop("fmin_hz")), float(a.pop("fmax_hz")))
+    return AcousticParams(voc_type=cfg["data"]["voc_type"], freq_range=fr, **a)
+
+
+def dl_frames(p, cfg):
+    import shutil
+    d = cfg["data"]
+    out = p.stage_dir("frames")
+    if d["source"] == "frames":
+        shutil.copy(d["frames_csv"], out / "frames.csv")
+        shutil.copy(d["frames_params"], out / "params.json")
+        frames = pd.read_csv(out / "frames.csv")
+    else:
+        from speciesclassifiers.delphinid import make_frames
+        acoustic = dl_acoustic(cfg)
+        print(f"Making {acoustic.voc_type} frames from the annotated periods...")
+        frames, info = make_frames(d["binary_folder"], d["annotations"], acoustic, sample_rate=d.get("sample_rate"))
+        frames.to_csv(out / "frames.csv", index=False)
+        _write_json({"acoustic_params": acoustic.to_dict(), "sample_rate": info["sample_rate"],
+                     "recording_settings": info, "binary_folder": d["binary_folder"],
+                     "annotations_csv": d["annotations"]}, out / "params.json")
+        if info.get("events_without_frames"):
+            print(f"Events without any frames: {', '.join(map(str, info['events_without_frames']))}")
+    g = cfg["labels"].get("group_col") or "event_id"
+    frames["label"] = frames["label"].astype(str)
+    frames.groupby("label").agg(groups=(g, "nunique"), frames=(g, "size")).reset_index().to_csv(
+        out / "class_counts.csv", index=False)
+    print(f"{len(frames)} frames, {frames[g].nunique()} groups, {frames['label'].nunique()} labels")
+
+
+def dl_training_data(p, cfg):
+    """Frames, classes, acoustic params and sample rate for training (labels with < 2 groups dropped)."""
+    from speciesclassifiers.delphinid import AcousticParams
+    frames = pd.read_csv(p.folder / "frames" / "frames.csv")
+    frames["label"] = frames["label"].astype(str)
+    g = cfg["labels"].get("group_col") or "event_id"
+    if cfg["labels"].get("classes"):
+        frames = frames[frames["label"].isin(cfg["labels"]["classes"])]
+    per = frames.groupby("label")[g].nunique()
+    few = per[per < 2].index.tolist()
+    if few:
+        print(f"Leaving out labels with fewer than 2 groups: {few}")
+        frames = frames[~frames["label"].isin(few)]
+    meta = read_json(p.folder / "frames" / "params.json")
+    acoustic = AcousticParams(**{k: v for k, v in meta["acoustic_params"].items()
+                                 if k in AcousticParams.__dataclass_fields__})
+    return frames.reset_index(drop=True), sorted(frames["label"].unique()), acoustic, meta.get("sample_rate"), g
+
+
+def dl_params(cfg):
+    from speciesclassifiers.delphinid import CNNParams, ResamplingParams, TrainingParams
+    s = cfg["settings"]
+    return CNNParams(**s["cnn"]), TrainingParams(**s["training"]), ResamplingParams(**s["resampling"])
+
+
+def dl_crossval(p, cfg):
+    require_tensorflow()
+    from speciesclassifiers.delphinid import cross_validate, summarise
+    frames, classes, acoustic, _, g = dl_training_data(p, cfg)
+    cnn, training, resampling = dl_params(cfg)
+    n_folds = cfg["settings"]["crossval"].get("n_folds")
+    print(f"Cross-validation: {len(classes)} classes, {frames[g].nunique()} groups"
+          + (f", {n_folds} folds" if n_folds else ", leaving out one group at a time"))
+    preds, hist = cross_validate(frames, classes, "label", g, cnn, training, resampling, n_folds=n_folds,
+                                 classifier=cfg.get("model_name", "delphinID"), voc_type=acoustic.voc_type)
+    out = p.stage_dir("crossval")
+    preds.to_csv(out / "cv_predictions.csv", index=False)
+    hist.to_csv(out / "cv_history.csv", index=False)
+    s = summarise(preds)
+    _write_json({"frame_accuracy": s["frame_accuracy"], "event_accuracy": s["event_accuracy"],
+                 "event_accuracy_by_class": s["event_accuracy_by_class"].to_dict()}, out / "cv_summary.json")
+    print(f"Frame accuracy {s['frame_accuracy']:.0%}, event accuracy {s['event_accuracy']:.0%}")
+
+
+def dl_model(p, cfg):
+    require_tensorflow()
+    from speciesclassifiers.delphinid import export_pamguard, fit_bootstrapped
+    frames, classes, acoustic, sr, g = dl_training_data(p, cfg)
+    cnn, training, resampling = dl_params(cfg)
+    print(f"Training the final model on all {len(frames)} frames ({resampling.n_bootstraps} bootstraps)...")
+    model, hist = fit_bootstrapped(frames, classes, "label", g, cnn, training, resampling, progress=True)
+    out = p.stage_dir("model")
+    for old in out.glob("*.zip"):
+        old.unlink()
+    hist.to_csv(out / "history.csv", index=False)
+    info = {"cnn_params": cnn.to_dict(), "training_params": training.to_dict(),
+            "resampling_params": resampling.to_dict(),
+            "training_data": {"n_frames": len(frames), "group_col": g,
+                              "groups_per_class": frames.groupby("label")[g].nunique().to_dict()}}
+    cv = read_json(p.folder / "crossval" / "cv_summary.json")
+    if cv and p.stage_states(cfg).get("crossval") == "done":
+        info["cross_validation"] = cv
+    name = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in cfg.get("model_name") or "delphinID")
+    z = export_pamguard(model, acoustic, classes, out / name, sample_rate=sr, info=info)
+    print(f"Saved the PAMGuard model {z}")
+
+
+DELPHINID = Workflow(
+    "delphinid", "delphinID (deep learning)",
+    "Train a delphinID neural network on detection frames (averaged spectra of whistle contours or clicks) "
+    "and export it for PAMGuard's deep learning classifier.",
+    [Stage("frames", "Detection frames", dl_frames, ["data", "settings.acoustic", "labels.group_col"]),
+     Stage("crossval", "Cross-validation", dl_crossval,
+           ["labels", "settings.cnn", "settings.training", "settings.resampling", "settings.crossval", "model_name"],
+           after="frames", optional=True,
+           enabled=lambda cfg: bool(cfg.get("settings", {}).get("crossval", {}).get("run", True))),
+     Stage("model", "Final model + PAMGuard zip", dl_model,
+           ["labels", "settings.cnn", "settings.training", "settings.resampling", "model_name"], after="frames")],
+    dl_defaults, dl_example)
+
+
+WORKFLOWS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID}

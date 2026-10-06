@@ -66,4 +66,73 @@ CALLTYPES = [
     ]),
 ]
 
-SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES}
+WHISTLE = ("data.voc_type", "whistle")
+CLICK = ("data.voc_type", "click")
+FROM_BINARIES = ("data.source", "binaries")
+
+DELPHINID = [
+    ("Model", [
+        {"key": "model_name", "label": "Model name", "kind": "text", "help": "used for the PAMGuard zip"},
+        {"key": "labels.classes", "label": "Classes to use (blank = all)", "kind": "list", "help": "comma-separated"},
+        {"key": "labels.group_col", "label": "Group column", "kind": "text", "advanced": True,
+         "help": "independent unit for testing (default event_id)"},
+    ]),
+    ("Detection frames", [
+        {"key": "settings.acoustic.frame_len", "label": "Frame length (s)", "kind": "number", "step": 0.5, "min": 0.5,
+         "when": FROM_BINARIES},
+        {"key": "settings.acoustic.hop", "label": "Step between frames (s)", "kind": "number", "step": 0.5, "min": 0.1,
+         "when": FROM_BINARIES, "help": "smaller than the frame length = overlapping frames"},
+        {"key": "settings.acoustic.fmin_hz", "label": "Lowest frequency (Hz)", "kind": "number", "step": 1000,
+         "when": FROM_BINARIES, "help": "published models: whistles 2000-20000, clicks 10000-40000"},
+        {"key": "settings.acoustic.fmax_hz", "label": "Highest frequency (Hz)", "kind": "number", "step": 1000,
+         "when": FROM_BINARIES},
+        {"key": "settings.acoustic.min_density", "label": "Min whistle density (0-1)", "kind": "number",
+         "step": 0.01, "when": WHISTLE, "also": FROM_BINARIES, "help": "contour points per time slice in a frame"},
+        {"key": "settings.acoustic.min_frag_ms", "label": "Shortest contour (ms)", "kind": "number", "step": 50,
+         "when": WHISTLE, "also": FROM_BINARIES, "advanced": True},
+        {"key": "settings.acoustic.min_clicks", "label": "Min clicks per frame", "kind": "int", "min": 1,
+         "when": CLICK, "also": FROM_BINARIES},
+        {"key": "settings.acoustic.fft_len", "label": "Click FFT length", "kind": "int", "when": CLICK,
+         "also": FROM_BINARIES, "advanced": True},
+        {"key": "settings.acoustic.smooth_window", "label": "Spectrum smoothing (bins)", "kind": "int",
+         "when": CLICK, "also": FROM_BINARIES, "advanced": True},
+        {"key": "settings.acoustic.downsample", "label": "Downsampling (bins averaged)", "kind": "int", "min": 1,
+         "when": FROM_BINARIES, "advanced": True},
+    ]),
+    ("Training", [
+        {"key": "settings.training.epochs", "label": "Epochs per bootstrap", "kind": "int", "min": 1},
+        {"key": "settings.resampling.n_bootstraps", "label": "Bootstraps", "kind": "int", "min": 1,
+         "help": "successive subsamples the model is trained on"},
+        {"key": "settings.resampling.max_per_group", "label": "Max frames per group per bootstrap", "kind": "int",
+         "min": 1},
+        {"key": "settings.training.learning_rate", "label": "Learning rate", "kind": "number", "step": 0.0001,
+         "advanced": True},
+        {"key": "settings.training.batch_size", "label": "Batch size", "kind": "int", "min": 1, "advanced": True},
+        {"key": "settings.training.patience", "label": "Early stopping patience (epochs)", "kind": "int",
+         "advanced": True},
+        {"key": "settings.training.seed", "label": "Random seed", "kind": "int", "advanced": True},
+    ]),
+    ("Cross-validation", [
+        {"key": "settings.crossval.run", "label": "Test the model by cross-validation", "kind": "switch"},
+        {"key": "settings.crossval.n_folds", "label": "Folds", "kind": "int", "min": 2, "optional": True,
+         "help": "blank = leave one group out at a time (thorough, slow); e.g. 5 = five models"},
+    ]),
+    ("Network (shape is fixed)", [
+        {"key": "settings.cnn.n_filters", "label": "Filters per layer", "kind": "int", "advanced": True},
+        {"key": "settings.cnn.kernel_size", "label": "Kernel size", "kind": "int", "advanced": True},
+        {"key": "settings.cnn.max_pool", "label": "Max pooling", "kind": "int", "advanced": True},
+        {"key": "settings.cnn.dense_size", "label": "Dense units", "kind": "int", "advanced": True},
+        {"key": "settings.cnn.dropout", "label": "Dropout (0-1)", "kind": "number", "step": 0.05, "advanced": True},
+        {"key": "settings.cnn.leaky_relu", "label": "LeakyReLU slope", "kind": "number", "step": 0.05,
+         "advanced": True},
+        {"key": "settings.cnn.l2", "label": "L2 regularisation", "kind": "number", "step": 0.0001, "advanced": True},
+    ]),
+]
+
+SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID}
+
+
+def applies(spec, cfg):
+    """Whether a field applies to the current settings (``when`` / ``also``: (dotted key, value))."""
+    from speciesclassifiers.project.project import get_path
+    return all(get_path(cfg, k) == v for k, v in [c for c in (spec.get("when"), spec.get("also")) if c])

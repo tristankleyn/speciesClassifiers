@@ -83,7 +83,7 @@ def bootstrap_sample(labels, groups, resampling: ResamplingParams, rng):
 
 def fit_bootstrapped(frames, classes, label_col="label", group_col="event_id",
                      cnn: CNNParams = None, training: TrainingParams = None,
-                     resampling: ResamplingParams = None, seed=None, verbose=0):
+                     resampling: ResamplingParams = None, seed=None, verbose=0, progress=False):
     """Build a model and train it on ``n_bootstraps`` successive subsamples of ``frames``.
 
     Returns (model, history) where history has one row per bootstrap and epoch.
@@ -100,6 +100,10 @@ def fit_bootstrapped(frames, classes, label_col="label", group_col="event_id",
     for b in range(resampling.n_bootstraps):
         tr, va = bootstrap_sample(frames[label_col].to_numpy(), frames[group_col].to_numpy(), resampling, rng)
         h = train(model, x[tr], y[tr], x[va], y[va], training, verbose=verbose)
+        if progress:
+            acc = h.history.get("val_accuracy", h.history.get("accuracy", [float("nan")]))[-1]
+            print(f"[{b + 1}/{resampling.n_bootstraps}] bootstrap: {len(tr)} training frames, "
+                  f"{len(h.history['loss'])} epochs, validation accuracy {acc:.2f}", flush=True)
         for e in range(len(h.history["loss"])):
             hist.append({"bootstrap": b + 1, "epoch": e + 1, "n_train": len(tr), "n_val": len(va),
                          **{k: v[e] for k, v in h.history.items()}})

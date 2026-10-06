@@ -4,6 +4,7 @@ Each check returns a dict: ``ok`` (bool), ``messages`` (list of (level, text), l
 "error"), ``table`` (optional DataFrame preview) and ``info`` (values the app can use, e.g. columns).
 """
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -54,6 +55,77 @@ def check_rf_data(d):
                      columns=list(data.columns))
     _class_warnings(r, counts, label)
     r["table"] = counts
+    return r
+
+
+def check_binaries(path, voc_type="whistle", r=None):
+    """A folder of PAMGuard binaries from the Whistle and Moan Detector or the Click Detector."""
+    from speciesclassifiers.io.pamguard_binary import CLICK_PATTERN, WHISTLE_PATTERN, file_start_time, list_binaries
+    r = r or _result()
+    if not path or not Path(path).is_dir():
+        return _err(r, f"Choose the folder that holds the binary files (.pgdf): {path or '(no path)'}")
+    pattern, what = (CLICK_PATTERN, "Click Detector") if voc_type == "click" else (WHISTLE_PATTERN,
+                                                                                    "Whistle and Moan Detector")
+    files = list_binaries(path, pattern)
+    if not files:
+        n_any = sum(1 for _ in Path(path).rglob("*.pgdf"))
+        return _err(r, f"No {what} binaries (file names containing '{pattern}') found; {n_any} other .pgdf files.")
+    times = [t for t in (file_start_time(f) for f in files) if t]
+    msg = f"{len(files)} {voc_type} binary files"
+    if times:
+        t0, t1 = (pd.Timestamp(x, unit="s", tz="UTC").strftime("%Y-%m-%d %H:%M") for x in (min(times), max(times)))
+        msg += f", {t0} to {t1} UTC"
+    r["messages"].append(("ok", msg + "."))
+    r["info"]["n_files"] = len(files)
+    try:
+        import speciesclassifiers.io.pamguard_binary as pb
+        pb._pypamguard()
+    except ImportError:
+        _err(r, "Reading binaries needs pypamguard: pip install pypamguard")
+    return r
+
+
+def check_dl_data(d):
+    """delphinID: binaries + an annotations CSV, or a frames CSV (+ its params JSON) from notebook 01."""
+    from speciesclassifiers.delphinid import AcousticParams
+    r = _result()
+    if d["source"] == "frames":
+        for k, what in (("frames_csv", "Frames CSV"), ("frames_params", "Parameters JSON")):
+            if not d.get(k) or not Path(d[k]).is_file():
+                return _err(r, f"{what} not found: {d.get(k) or '(no path)'}")
+        try:
+            frames = pd.read_csv(d["frames_csv"])
+            meta = json.loads(Path(d["frames_params"]).read_text())
+            ap = AcousticParams(**{k: v for k, v in meta["acoustic_params"].items()
+                                   if k in AcousticParams.__dataclass_fields__})
+        except Exception as e:
+            return _err(r, f"Couldn't read the frames: {e}")
+        n_in = sum(c[0] == "f" and c[1:].isdigit() for c in frames.columns)
+        expected = ap.n_bins(meta.get("sample_rate"))
+        if n_in != expected:
+            _err(r, f"The frames have {n_in} inputs but their parameters give {expected}.")
+        g = "event_id"
+        counts = frames.groupby(frames["label"].astype(str)).agg(groups=(g, "nunique"), frames=(g, "size")).reset_index()
+        r["messages"].append(("ok", f"{len(frames)} {ap.voc_type} frames, {frames[g].nunique()} events, "
+                                    f"{len(counts)} labels, {n_in} inputs per frame."))
+        _class_warnings(r, counts, "label")
+        r["table"] = counts
+        r["info"]["classes"] = sorted(counts["label"])
+        return r
+    check_binaries(d.get("binary_folder"), d.get("voc_type", "whistle"), r)
+    from speciesclassifiers.io import read_annotations
+    try:
+        ann = read_annotations(d.get("annotations"))
+    except Exception as e:
+        return _err(r, f"Couldn't read the annotations: {e}")
+    ann["hours"] = (ann["end"] - ann["start"]) / 3600
+    counts = ann.groupby("label").agg(events=("event_id", "nunique"), periods=("event_id", "size"),
+                                      hours=("hours", "sum")).reset_index().round(2)
+    r["messages"].append(("ok", f"{len(ann)} annotated periods, {ann['event_id'].nunique()} events, "
+                                f"{len(counts)} labels."))
+    _class_warnings(r, counts.rename(columns={"events": "groups"}), "label")
+    r["table"] = counts
+    r["info"]["classes"] = sorted(counts["label"].astype(str))
     return r
 
 
@@ -121,3 +193,45 @@ def check_annotations(lab):
     r["info"] = {"other_labels": others, "values": {c: sorted(map(str, calls[c].dropna().unique())) for c in others},
                  "labels": sorted(calls["label"].astype(str).unique())}
     return r
+
+
+TF_MIN = (2, 16)        # Keras 3 (model.export) arrived with TensorFlow 2.16
+TF_PACKAGES = ("tensorflow", "tensorflow-cpu", "tensorflow-macos", "tensorflow-intel")
+
+
+def _version_tuple(v):
+    out = []
+    for part in v.split(".")[:2]:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits or 0))
+    return tuple(out)
+
+
+def tensorflow_status():
+    """Is a suitable TensorFlow installed in this Python? Reads package versions only (fast, no import).
+
+    Returns {"ok", "installed", "version", "keras", "message"}.
+    """
+    from importlib import invalidate_caches
+    from importlib.metadata import PackageNotFoundError, version
+    invalidate_caches()
+    tf = None
+    for name in TF_PACKAGES:
+        try:
+            tf = version(name)
+            break
+        except PackageNotFoundError:
+            continue
+    try:
+        keras = version("keras")
+    except PackageNotFoundError:
+        keras = None
+    need = ".".join(map(str, TF_MIN))
+    if tf is None:
+        return {"ok": False, "installed": False, "version": None, "keras": keras,
+                "message": "TensorFlow isn't installed."}
+    if _version_tuple(tf) < TF_MIN or (keras and _version_tuple(keras) < (3, 0)):
+        return {"ok": False, "installed": True, "version": tf, "keras": keras,
+                "message": f"TensorFlow {tf} is installed, but delphinID needs {need} or newer (with Keras 3)."}
+    return {"ok": True, "installed": True, "version": tf, "keras": keras,
+            "message": f"TensorFlow {tf} is installed."}

@@ -26,12 +26,19 @@ A project runs as a series of stages (e.g. read detections → cross-validation 
 - Runs continue in the background if you close the browser; reopen the project to see progress. **Stop** ends a run between steps.
 
 ## Screens
-1. **Data**: where your detections are (ROCCA contour stats / a feature table, or PAMGuard whistle binaries / a contours JSON). **Check** reads them and reports counts, date ranges and problems before you run anything.
+1. **Data**: where your detections are (ROCCA contour stats / a feature table; PAMGuard binaries with an annotations CSV, or frames from notebook 01, for delphinID; PAMGuard whistle binaries / a contours JSON for call types). **Check** reads them and reports counts, date ranges and problems before you run anything.
 2. **Labels** (call types): call annotations (CSV or annotation tables), and the yes/no label tasks clusters are judged on (e.g. species X or Y; ecotype only when species is X).
 3. **Settings**: the main settings with short explanations; less common ones under *Advanced*.
 4. **Run**: stages, progress bar, log.
 5. **Results**: cross-validated accuracy, confusion matrices, clusters and their verdicts. Random forest: sliders for the decision thresholds with the threshold curve. Call types: block length and decision rules.
 6. **Classify new data · export**: apply the classifier to new data (group decisions, or a presence timeline of decision blocks) and find the outputs: the model, the call-type library and `standalone.py`, predictions in the standard format.
 
+## delphinID and TensorFlow
+delphinID models are trained with TensorFlow (2.16 or newer). The Run screen checks whether a suitable version is installed. If not, it offers two routes:
+- **Train in Google Colab** (nothing to install): the app makes the detection frames, then packs them with your settings into a *bundle* (in the project's `colab` folder). Open notebook `02_train_delphinID` in Colab, upload the bundle, set `BUNDLE` to its name and run all cells; the notebook downloads a results zip. **Import results from Colab** puts the cross-validation results and the PAMGuard model into the project. If you change training settings afterwards, those stages show as *settings changed*.
+- **Install TensorFlow** on this computer (about 600 MB, a few minutes), from the app. Training then runs locally like the other stages.
+
+Without TensorFlow, **Run** makes the detection frames only. The **Export to PAMGuard** screen shows the model zip and the settings to use in PAMGuard's Deep Learning Classifier.
+
 ## Not in the app yet
-delphinID and transfer learning: use notebooks `01_make_frames`, `02_train_delphinID` (runs in Google Colab, no TensorFlow install needed) and `04_transferlearning`.
+Transfer learning: use notebook `04_transferlearning` (Python or R).

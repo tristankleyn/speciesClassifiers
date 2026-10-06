@@ -16,7 +16,7 @@ from speciesclassifiers.project import checks
 from speciesclassifiers.project.workflows import EXAMPLES
 
 from . import results
-from .settings import SETTINGS
+from .settings import SETTINGS, applies
 from .widgets import Saver, field, open_folder, path_row, pick_path, show_check
 
 HOME = Path.home() / ".speciesclassifiers"
@@ -51,9 +51,7 @@ METHODS = [   # (key, title, icon, one-sentence caption, requirements)
       "`start, end` (UTC), plus optional label columns such as `species`; or annotation tables",
       "**Days**: annotated calls from at least 2 days; days without annotations can be included too"]),
 ]
-COMING = {"delphinid": "Not in the app yet: use notebooks 01_make_frames and 02_train_delphinID "
-                       "(02 runs in Google Colab, so no TensorFlow install is needed).",
-          "transferlearning": "Transfer learning isn't in the app yet: use notebook 04_transferlearning "
+COMING = {"transferlearning": "Transfer learning isn't in the app yet: use notebook 04_transferlearning "
                               "(Python or R)."}
 
 
@@ -193,7 +191,7 @@ async def example_dialog():
         return
     with ui.dialog() as dialog, ui.card().classes("w-[36rem]"):
         ui.label("Try an example (synthetic data)").classes("text-lg font-medium")
-        for c in ("randomforest", "calltypes"):
+        for c in ("randomforest", "delphinid", "calltypes"):
             wf = WORKFLOWS[c]
             with ui.card().classes("w-full cursor-pointer hover:bg-slate-50").on(
                     "click", lambda c=c: dialog.submit(c)):
@@ -231,7 +229,7 @@ def project_page(path: str):
     saver = Saver(p, on_saved)
     steps = (["data", "labels"] if kind == "calltypes" else ["data"]) + ["settings", "run", "results", "apply"]
     names = {"data": "Data", "labels": "Labels", "settings": "Settings", "run": "Run", "results": "Results",
-             "apply": "Classify new data · export"}
+             "apply": "Export to PAMGuard" if kind == "delphinid" else "Classify new data · export"}
     titles = {s: f"{k} · {names[s]}" for k, s in enumerate(steps, 1)}
 
     with ui.row().classes("w-full no-wrap items-start p-2 gap-4"):
@@ -255,10 +253,11 @@ def project_page(path: str):
                     labels_panel(p, saver)
                     next_button(panels, steps, "labels", names)
             with ui.tab_panel("settings"):
-                settings_panel(saver, kind)
+                settings_ui = ui.refreshable(settings_panel)
+                settings_ui(saver, kind)
                 next_button(panels, steps, "settings", names)
             with ui.tab_panel("run"):
-                run_ui = run_panel(p)
+                run_ui = run_panel(p, kind)
                 run_next = ui.row()
             with ui.tab_panel("results"):
                 results_box = ui.column().classes("w-full")
@@ -285,9 +284,11 @@ def project_page(path: str):
             box.clear()
             with box:
                 if panels.value == "results":
-                    await (results.rf_results if kind == "randomforest" else results.ct_results)(p, saver)
+                    await {"randomforest": results.rf_results, "calltypes": results.ct_results,
+                           "delphinid": results.dl_results}[kind](p, saver)
                 else:
-                    await (results.rf_apply if kind == "randomforest" else results.ct_apply)(p, saver, start_run)
+                    await {"randomforest": results.rf_apply, "calltypes": results.ct_apply,
+                           "delphinid": results.dl_export}[kind](p, saver, start_run)
         finally:
             last["busy"] = False
 
@@ -310,6 +311,12 @@ def project_page(path: str):
         if p.is_running():
             ui.notify("Already running", type="warning")
             return
+        if kind == "delphinid" and stages is None:
+            from speciesclassifiers.project.checks import tensorflow_status
+            if not tensorflow_status()["ok"]:
+                stages = ["frames"]
+                ui.notify("No suitable TensorFlow here, so only the detection frames are made. Train in Google "
+                          "Colab or install TensorFlow (options above).", type="warning", multi_line=True)
         start_background(p.folder, stages, force)
         last["run_state"] = "running"
         ui.notify("Started: progress is on the Run tab. You can close the browser; it keeps running.")
@@ -330,10 +337,16 @@ def project_page(path: str):
                           on_click=lambda: setattr(panels, "value", "results")).props("size=lg").classes("mt-4")
 
     run_ui["start"] = start_run
-    panels.on_value_change(lambda: refresh_results(True))
+    def on_panel():
+        if panels.value == "settings":
+            settings_ui.refresh()          # some settings depend on the data choices (e.g. whistles or clicks)
+        return refresh_results(True)
+    panels.on_value_change(on_panel)
 
     async def tick():
         run_ui["refresh"]()
+        if "tf" in run_ui and panels.value == "run":
+            run_ui["tf"]()
         refresh_status()
         update_run_next()
         if panels.value in ("results", "apply") and not p.is_running():
@@ -352,7 +365,52 @@ def next_button(panels, steps, step, names):
 
 
 # ------------------------------------------------------------------------ data / labels -----------
+def dl_data_panel(p, saver):
+    ui.markdown("#### Detections and labels\nPAMGuard binary files plus an **annotations CSV** of labelled "
+                "periods: `event_id, label, start, end` (UTC), one row per period (several periods can share an "
+                "event). Only detections inside annotated periods are used. Or use frames already made with "
+                "notebook 01.")
+    ui.select({"binaries": "PAMGuard binaries + annotations CSV", "frames": "Frames CSV made with notebook 01"},
+              value=saver.get("data.source"), label="Source",
+              on_change=lambda e: (saver.set("data.source", e.value), opts.refresh())).classes("w-96")
+
+    def set_voc(v):
+        saver.set("data.voc_type", v)
+        fmin, fmax = (10000.0, 40000.0) if v == "click" else (2000.0, 20000.0)
+        saver.set("settings.acoustic.fmin_hz", fmin)
+        saver.set("settings.acoustic.fmax_hz", fmax)
+        name = saver.get("model_name", "")
+        if name.startswith("delphinID_"):
+            saver.set("model_name", f"delphinID_{v}s")
+
+    @ui.refreshable
+    def opts():
+        if saver.get("data.source") == "frames":
+            path_row(saver, "data.frames_csv", "Frames CSV", "file", (".csv",))
+            path_row(saver, "data.frames_params", "Frame parameters JSON (made with the frames)", "file", (".json",))
+        else:
+            ui.select({"whistle": "Whistles (Whistle and Moan Detector)", "click": "Clicks (Click Detector)"},
+                      value=saver.get("data.voc_type"), label="Detections",
+                      on_change=lambda e: set_voc(e.value)).classes("w-96")
+            path_row(saver, "data.binary_folder", "Folder of binary files", "dir")
+            path_row(saver, "data.annotations", "Annotations CSV", "file", (".csv",))
+            field(saver, {"key": "data.sample_rate", "label": "Sample rate (Hz)", "kind": "number", "optional": True,
+                          "help": "blank = work it out from the binaries"})
+    opts()
+
+    async def check():
+        out.clear()
+        with out:
+            ui.spinner()
+        r = await run.io_bound(checks.check_dl_data, saver.project.config()["data"])
+        show_check(out, r)
+    ui.button("Check data", icon="fact_check", on_click=check)
+    out = ui.column().classes("w-full")
+
+
 def data_panel(p, saver, kind):
+    if kind == "delphinid":
+        return dl_data_panel(p, saver)
     if kind == "randomforest":
         ui.markdown("#### Detections\nOne row per detection with its measurements, a **label** (class) and a "
                     "**group** (encounter or other independent unit, used for testing). PAMGuard ROCCA contour "
@@ -511,7 +569,11 @@ def settings_panel(saver, kind):
     ui.markdown("#### Settings\nThe defaults are a good start. Changing a setting marks the stages it affects "
                 "to be rerun; finished stages it doesn't affect are kept.")
     groups = SETTINGS[kind]
+    cfg = saver.project.config()
     for title, specs in groups:
+        specs = [s for s in specs if applies(s, cfg)]
+        if not specs:
+            continue
         basic = [s for s in specs if not s.get("advanced")]
         adv = [s for s in specs if s.get("advanced")]
         ui.label(title).classes("text-base font-medium mt-2")
@@ -524,10 +586,13 @@ def settings_panel(saver, kind):
 
 
 # ------------------------------------------------------------------------ run ---------------------
-def run_panel(p):
+def run_panel(p, kind):
     ui.markdown("#### Run\nStages already done with the same settings are skipped, so you can stop and resume. "
                 "Runs continue in the background if you close the browser.")
     h = {}
+    if kind == "delphinid":
+        from .tensorflow_panel import tensorflow_box
+        h["tf"] = tensorflow_box(p, lambda *a, **k: h["start"](*a, **k))
     with ui.row().classes("gap-2"):
         run_btn = ui.button("Run", icon="play_arrow", on_click=lambda: h["start"]())
         ui.button("Rerun everything", icon="replay", on_click=lambda: confirm_force()).props("outline")

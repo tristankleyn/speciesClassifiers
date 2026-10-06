@@ -387,3 +387,146 @@ def outputs(p, bl):
                         ("Clusters", p.folder / "discover" / "clusters.csv")]:
         if Path(path).is_file():
             output_row(label, path, p.folder)
+
+
+# ============================================================================ delphinID =============
+def _dl_summary(path):
+    from speciesclassifiers.delphinid import summarise
+    key = ("dl", str(path), Path(path).stat().st_mtime)
+    if key not in _CACHE:
+        _CACHE[key] = summarise(_csv(path, dtype={"event_id": str, "test_group": str}))
+    return _CACHE[key]
+
+
+def _event_curve(ev, classes):
+    """Event accuracy and share of events decided as the minimum event score rises."""
+    from speciesclassifiers.randomforest.model import decision_score
+    score = decision_score(ev[classes].to_numpy())
+    rows = []
+    for t in np.linspace(0, 0.5, 26):
+        keep = score >= t
+        rows.append({"threshold": t, "kept": keep.mean(),
+                     "accuracy": ev.loc[keep, "correct"].mean() if keep.any() else np.nan})
+    return pd.DataFrame(rows), score
+
+
+async def dl_results(p, saver):
+    from speciesclassifiers.plots import plot_confusion
+    ui.markdown("#### Cross-validation\nEach fold's frames were classified by a model trained without their "
+                "groups. **Frame accuracy**: single frames (a few seconds each). **Event accuracy**: whole events, "
+                "from the summed probabilities of their frames.")
+    st = p.status().get("stages", {})
+    cfg = p.config()
+    if not cfg["settings"]["crossval"].get("run", True) and p.stage_states()["crossval"] != "done":
+        ui.label("Cross-validation is switched off (Settings), so there are no test results.").classes(
+            "text-gray-600")
+    elif not not_ready(p, "crossval", "cross-validation results"):
+        if st.get("crossval", {}).get("source"):
+            ui.label(f"Trained in {st['crossval']['source']}.").classes("text-xs text-gray-500")
+        path = p.folder / "crossval" / "cv_predictions.csv"
+        s = await run.io_bound(_dl_summary, path)
+        ev = s["events"]
+        classes = sorted(s["event_confusion"].columns.union(s["event_confusion"].index))
+        classes = [c for c in classes if c in ev.columns]
+        curve, score = await run.io_bound(_event_curve, ev, classes)
+        with ui.row().classes("gap-3"):
+            metric("Frame accuracy", s["frame_accuracy"])
+            metric("Event accuracy", s["event_accuracy"])
+            metric("Events", len(ev), "{:d}")
+            metric("Classes", len(classes), "{:d}")
+        with ui.row().classes("gap-4 items-start w-full"):
+            slots = [ImageSlot("w-[24rem]"), ImageSlot("w-[24rem]"), ImageSlot("w-[26rem]")]
+        acc = s["event_accuracy_by_class"].rename("event accuracy").reset_index()
+        with ui.expansion("Events", icon="table_rows").classes("w-full"):
+            e = ev.assign(score=score)[["event_id", "true_class", "predicted", "correct", "score", "n_frames"]]
+            table(acc, rows=10)
+            table(e.sort_values(["correct", "score"]), rows=15)
+        hist = _csv(p.folder / "crossval" / "cv_history.csv")
+        hist_slot = None
+        if hist is not None and len(hist):
+            with ui.expansion("Training curves", icon="show_chart").classes("w-full"):
+                ui.label("Validation loss well above training loss, or rising, suggests overfitting: try more "
+                         "dropout, fewer epochs or fewer dense units.").classes("text-xs text-gray-500")
+                hist_slot = ImageSlot("w-full max-w-4xl")
+
+        def conf(c, title):
+            fig, ax = new_fig(4.2, 3.8)
+            plot_confusion(c, title, ax=ax)
+            return fig
+
+        def draw_curve():
+            fig, ax = new_fig(4.8, 3.4)
+            ax.plot(curve["threshold"], curve["accuracy"], label="event accuracy")
+            ax.plot(curve["threshold"], curve["kept"], "--", label="events decided")
+            ax.set(xlabel="Minimum event score", ylim=(0, 1.05), title="Event threshold curve")
+            ax.legend(fontsize=8)
+            return fig
+
+        def draw_hist():
+            boots = sorted(hist["bootstrap"].unique())
+            from matplotlib.figure import Figure
+            fig = Figure(figsize=(2.6 * len(boots), 2.8))
+            axes = np.atleast_1d(fig.subplots(1, len(boots), sharey=True))
+            for a, b in zip(axes, boots):
+                h = hist[hist["bootstrap"] == b].groupby("epoch")[["loss", "val_loss"]].mean()
+                a.plot(h.index, h["loss"], label="training")
+                a.plot(h.index, h["val_loss"], label="validation")
+                a.set(title=f"Bootstrap {b}", xlabel="Epoch")
+            axes[0].set_ylabel("Loss (mean over folds)")
+            axes[0].legend(fontsize=8)
+            return fig
+        ui.label("Event score: top probability × its lead over the second. In PAMGuard, events can be judged "
+                 "the same way from the model's frame predictions.").classes("text-xs text-gray-500")
+        await slots[0].fill(lambda: conf(s["frame_confusion"], "Frames"))
+        await slots[1].fill(lambda: conf(s["event_confusion"], "Events"))
+        await slots[2].fill(draw_curve)
+        if hist_slot:
+            await hist_slot.fill(draw_hist)
+    fc = _csv(p.folder / "frames" / "class_counts.csv")
+    if fc is not None:
+        with ui.expansion("Training frames per class", icon="table_rows").classes("w-full"):
+            table(fc, rows=15)
+
+
+async def dl_export(p, saver, start_run):
+    ui.markdown("#### Export to PAMGuard\nThe final model is trained on all frames and saved as a zip that "
+                "PAMGuard's **Deep Learning Classifier** loads directly.")
+    if not_ready(p, "model", "model"):
+        return
+    zips = sorted((p.folder / "model").glob("*.zip"))
+    if not zips:
+        ui.label("No model zip found: run again.").classes("text-amber-700")
+        return
+    z = zips[0]
+    output_row("PAMGuard model", z, p.folder)
+    info = await run.io_bound(_zip_info, z)
+    ui.markdown("""#### Using the model in PAMGuard
+1. Add a **Deep Learning Classifier** module. Set its source to the **Whistle and Moan Detector** (whistle model) or the **Click Detector** (click model).
+2. Choose **delphinID** as the model type and select the zip.
+3. Set the segment length, hop and minimum detection value to those below.
+
+A click model only suits recordings at the sample rate it was trained on, because that sets which FFT bins become its inputs.""")
+    if info:
+        rows = pd.DataFrame([{"setting": k, "value": str(v)} for k, v in info.get("pamguard_settings", {}).items()])
+        if len(rows):
+            table(rows, rows=12)
+        cv = info.get("cross_validation")
+        if cv:
+            ui.label(f"Cross-validated accuracy stored in the zip: frames {cv.get('frame_accuracy', 0):.0%}, "
+                     f"events {cv.get('event_accuracy', 0):.0%}.").classes("text-sm text-gray-600")
+    for label, path in [("Training frames", p.folder / "frames" / "frames.csv"),
+                        ("Cross-validation predictions (standard format)", p.folder / "crossval" / "cv_predictions.csv"),
+                        ("Final model training history", p.folder / "model" / "history.csv")]:
+        if Path(path).is_file():
+            output_row(label, path, p.folder)
+
+
+def _zip_info(path):
+    import json
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as z:
+            name = next(n for n in z.namelist() if n.endswith("speciesclassifiers_info.json"))
+            return json.loads(z.read(name))
+    except Exception:
+        return None

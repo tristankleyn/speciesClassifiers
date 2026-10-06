@@ -16,6 +16,9 @@ Defaults reproduce the published models; loading their weights into `build_model
 ## Export to PAMGuard
 `export_pamguard(model, acoustic, classes, "model.zip")` writes a SavedModel plus `delphinID.pdtf` (the transforms and class names PAMGuard needs), zipped. The number of classes comes from `classes`. `load_pamguard_zip` loads one back for checking.
 
+## In the app
+Create a **Deep Learning Classifier** project: binaries + an annotations CSV (or frames from notebook 01) → frames → cross-validation → final model → PAMGuard zip. See [app.md](app.md#delphinid-and-tensorflow) for the TensorFlow check and the Colab route.
+
 ## Without installing TensorFlow
-- Google Colab: notebook 02 opens in Colab with TensorFlow preinstalled; upload frames, download the zip.
-- Locally: `pip install -e "python[delphinid]"` in a fresh environment. The models are small, so a CPU is enough.
+- Google Colab: notebook 02 opens in Colab with TensorFlow preinstalled; upload frames (or a bundle from the app), download the zip.
+- Locally: `pip install -e "python[delphinid]"` (TensorFlow 2.16 or newer) in a fresh environment. The models are small, so a CPU is enough.

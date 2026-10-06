@@ -86,3 +86,44 @@ def test_app_imports():
     from speciesclassifiers.app import main as app_main
     from speciesclassifiers.app.settings import SETTINGS
     assert callable(app_main) and set(SETTINGS) == set(WORKFLOWS)
+
+
+def test_delphinid_frames_and_colab_roundtrip(tmp_path):
+    """Frames stage, Colab bundle, and importing a results zip (no TensorFlow needed)."""
+    import zipfile
+
+    from speciesclassifiers.project import colab
+    p = Project.create(tmp_path / "dl", "delphinid", config=WORKFLOWS["delphinid"].example())
+    assert run(p.folder, ["frames"]) == "finished"
+    assert p.stage_states()["frames"] == "done"
+    r = checks.check_dl_data(p.config()["data"])
+    assert r["ok"] and len(r["info"]["classes"]) == 3
+    b = colab.make_bundle(p.folder)
+    with zipfile.ZipFile(b) as z:
+        meta = json.loads(z.read("bundle.json"))
+        assert {"frames.csv", "params.json"} <= set(z.namelist())
+    assert meta["settings"]["N_FOLDS"] == 4 and meta["settings"]["EPOCHS"] == 10
+    res = tmp_path / "results.zip"              # what notebook 02 writes
+    with zipfile.ZipFile(res, "w") as z:
+        z.writestr("results.json", json.dumps({"project": meta["project"], "fingerprints": meta["fingerprints"]}))
+        z.writestr("delphinID_example.zip", b"model")
+        z.writestr("cv_predictions.csv", "detection_id,event_id,classifier,voc_type,class,probability\n")
+    msgs = colab.import_results(p.folder, res)
+    assert len(msgs) == 2 and p.stage_states() == {"frames": "done", "crossval": "done", "model": "done"}
+    p.update_config({"settings": {"training": {"epochs": 11}}})       # settings changed after training
+    assert p.stage_states()["model"] == "outdated"
+
+
+def test_tensorflow_status():
+    st = checks.tensorflow_status()
+    assert set(st) == {"ok", "installed", "version", "keras", "message"}
+    assert checks._version_tuple("2.15.1") < checks.TF_MIN <= checks._version_tuple("2.16.0rc0")
+
+
+def test_delphinid_train(tmp_path):
+    pytest.importorskip("tensorflow")
+    cfg = WORKFLOWS["delphinid"].example()
+    cfg["settings"] = {"training": {"epochs": 2}, "resampling": {"n_bootstraps": 1}, "crossval": {"n_folds": 2}}
+    p = Project.create(tmp_path / "dlt", "delphinid", config=cfg)
+    assert run(p.folder) == "finished"
+    assert list((p.folder / "model").glob("*.zip")) and (p.folder / "crossval" / "cv_predictions.csv").is_file()
