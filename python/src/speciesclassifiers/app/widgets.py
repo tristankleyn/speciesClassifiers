@@ -81,13 +81,38 @@ def field(saver, spec):
     return el
 
 
+def new_fig(w, h):
+    """A matplotlib figure and axes that can be drawn in a background thread (no pyplot)."""
+    from matplotlib.figure import Figure
+    fig = Figure(figsize=(w, h))
+    return fig, fig.subplots()
+
+
 def fig_src(fig):
-    """Matplotlib figure -> data URL for ui.image (and closes the figure)."""
-    import matplotlib.pyplot as plt
+    """Matplotlib figure -> data URL for ui.image."""
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
-    plt.close(fig)
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+class ImageSlot:
+    """A place for a figure that is drawn in a background thread, so the page stays responsive."""
+
+    def __init__(self, classes=""):
+        with ui.element("div").classes(classes) as self.box:
+            self.spinner = ui.spinner(size="lg").classes("m-8")
+            self.img = ui.image().classes("w-full")
+            self.img.set_visibility(False)
+
+    async def fill(self, draw):
+        from nicegui import run
+        try:
+            src = await run.io_bound(lambda: fig_src(draw()))
+            self.img.set_source(src)
+            self.img.set_visibility(True)
+            self.spinner.delete()
+        except (RuntimeError, KeyError, ValueError):   # page or panel was closed meanwhile
+            pass
 
 
 def show_check(container, result):

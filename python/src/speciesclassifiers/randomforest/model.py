@@ -76,6 +76,53 @@ def prune_outliers(df, features, label_col, prune):
     return df[keep]
 
 
+class BalancedForest:
+    """Balanced random forest: every tree is grown on the same number of detections from each class,
+    drawn with replacement (as many as the smallest class has; R's ``randomForest(strata, sampsize)``).
+    Probabilities are averaged over trees. Trees are built in parallel threads."""
+
+    def __init__(self, n_trees=500, max_features="sqrt", min_samples_leaf=1, seed=42, n_jobs=-1):
+        self.n_trees, self.max_features, self.min_samples_leaf = n_trees, max_features, min_samples_leaf
+        self.seed, self.n_jobs = seed, n_jobs
+
+    def fit(self, X, y):
+        import os
+        from concurrent.futures import ThreadPoolExecutor
+
+        from sklearn.tree import DecisionTreeClassifier
+
+        X = np.asarray(X, dtype=np.float32)
+        self.classes_, yi = np.unique(np.asarray(y), return_inverse=True)
+        by_class = [np.where(yi == k)[0] for k in range(len(self.classes_))]
+        n = min(len(i) for i in by_class)
+        seeds = np.random.default_rng(self.seed).integers(2 ** 31 - 1, size=self.n_trees)
+
+        def grow(s):
+            r = np.random.default_rng(s)
+            idx = np.concatenate([r.choice(i, n, replace=True) for i in by_class])
+            return DecisionTreeClassifier(max_features=self.max_features, min_samples_leaf=self.min_samples_leaf,
+                                          random_state=int(s)).fit(X[idx], yi[idx])
+        workers = os.cpu_count() or 1 if self.n_jobs in (-1, None) else max(1, int(self.n_jobs))
+        workers = min(workers, max(1, self.n_trees // 25))
+        if workers == 1:
+            self.trees_ = [grow(s) for s in seeds]
+        else:   # one batch of trees per thread (tree building releases the GIL)
+            with ThreadPoolExecutor(workers) as ex:
+                batches = ex.map(lambda b: [grow(s) for s in b], np.array_split(seeds, workers))
+            self.trees_ = [t for b in batches for t in b]
+        imp = np.mean([t.feature_importances_ for t in self.trees_], axis=0)
+        self.feature_importances_ = imp / imp.sum() if imp.sum() else imp
+        return self
+
+    def predict_proba(self, X):
+        X = np.asarray(X, dtype=np.float32)
+        out = np.zeros((len(X), len(self.classes_)))
+        for t in self.trees_:
+            p = t.predict_proba(X)
+            out[:, t.classes_] += p          # every tree saw every class, but stay safe
+        return out / len(self.trees_)
+
+
 class RandomForestModel:
     """A fitted random forest plus what is needed to apply it to new data."""
 
@@ -84,17 +131,12 @@ class RandomForestModel:
         self.medians = None
         self.forest = None
 
-    def fit(self, df):
-        from imblearn.ensemble import BalancedRandomForestClassifier
-
+    def fit(self, df, n_jobs=-1):
         p = self.params
         x = df[self.features].astype(float)
         self.medians = x.median()
         mtry = p.mtry or max(1, int(np.sqrt(len(self.features))))
-        self.forest = BalancedRandomForestClassifier(
-            n_estimators=p.n_trees, max_features=mtry, min_samples_leaf=p.node_size,
-            sampling_strategy="all", replacement=True, bootstrap=False,
-            random_state=p.seed, n_jobs=-1 if len(df) > 5000 else 1)  # threads only pay off on big data
+        self.forest = BalancedForest(p.n_trees, mtry, p.node_size, p.seed, n_jobs)
         self.forest.fit(x.fillna(self.medians).to_numpy(), df[self.label_col].astype(str).to_numpy())
         order = [list(self.forest.classes_).index(c) for c in self.classes]
         self._order = order
@@ -117,13 +159,14 @@ class RandomForestModel:
         return joblib.load(path)
 
 
-def fit(df, features, label_col="label", group_col="event_id", params: RFParams = None):
-    """Fit a random forest on all of ``df`` (pruned and capped per group as set in ``params``)."""
+def fit(df, features, label_col="label", group_col="event_id", params: RFParams = None, n_jobs=-1):
+    """Fit a random forest on all of ``df`` (pruned and capped per group as set in ``params``).
+    ``n_jobs``: CPU threads for growing trees (-1 = all)."""
     params = params or RFParams()
     train = prune_outliers(df, features, label_col, params.prune)
     train = cap_per_group(train, group_col, params.max_per_group, params.seed)
     classes = sorted(train[label_col].astype(str).unique())
-    return RandomForestModel(features, classes, params, label_col).fit(train)
+    return RandomForestModel(features, classes, params, label_col).fit(train, n_jobs)
 
 
 def detection_output(df, probs, classes, classifier, voc_type, label_col=None, id_col=None,
@@ -168,35 +211,56 @@ def group_predictions(detections, min_score=0.0, group_col="event_id"):
     return g.reset_index()
 
 
+def _cv_fold(df, g, features, label_col, group_col, params, classifier, voc_type, id_col, time_col, n_jobs):
+    test, rest = df[df[group_col] == g], df[df[group_col] != g]
+    if test[label_col].iloc[0] not in set(rest[label_col]):
+        return g, test[label_col].iloc[0], None, None, None
+    m = fit(rest, features, label_col, group_col, params, n_jobs=n_jobs)
+    p = m.predict_proba(test)
+    d = detection_output(test, p, m.classes, classifier, voc_type, label_col, id_col,
+                         event_col=group_col, time_col=time_col)
+    d["test_group"] = str(g)
+    return g, test[label_col].iloc[0], d, p.mean(0), m.classes
+
+
 def cross_validate(df, features, label_col="label", group_col="event_id", params: RFParams = None,
                    classifier="randomforest", voc_type="whistle", id_col=None, time_col=None, progress=True,
-                   unit="detections"):
+                   unit="detections", n_jobs=-1):
     """Leave-one-group-out cross-validation.
 
     For each group, a forest is trained on all other groups (pruned and capped per group) and
     predicts every detection of the left-out group. Returns detection predictions in the standard
-    output format, with ``score``, ``true_class`` and ``test_group``.
+    output format, with ``score``, ``true_class`` and ``test_group``. Folds run in parallel on
+    ``n_jobs`` CPU cores (-1 = all, 1 = one at a time).
     """
+    import os
+
+    from joblib import Parallel, delayed
+
     params = params or RFParams()
     df = df.copy()
     df[label_col] = df[label_col].astype(str)
     groups = list(pd.unique(df[group_col]))
-    out = []
-    for k, g in enumerate(groups):
-        test, rest = df[df[group_col] == g], df[df[group_col] != g]
-        if test[label_col].iloc[0] not in set(rest[label_col]):
+    cores = os.cpu_count() or 1
+    workers = min(len(groups), cores if n_jobs in (-1, None) else max(1, n_jobs))
+    if n_jobs in (-1, None) and len(groups) * params.n_trees < 5000:
+        workers = 1     # small job (under ~5 s): starting worker processes would cost more than it saves
+    args = (features, label_col, group_col, params, classifier, voc_type, id_col, time_col)
+    if workers > 1:   # one process per fold; trees within a fold on one core
+        results = Parallel(n_jobs=workers, return_as="generator_unordered")(
+            delayed(_cv_fold)(df, g, *args, 1) for g in groups)
+    else:
+        results = (_cv_fold(df, g, *args, -1) for g in groups)
+    out, done = [], {}
+    for k, (g, true, d, mean, classes) in enumerate(results):
+        if d is None:
             print(f"[{k + 1}/{len(groups)}] {g}: skipped, its class has no other groups to train on")
             continue
-        m = fit(rest, features, label_col, group_col, params)
-        p = m.predict_proba(test)
-        d = detection_output(test, p, m.classes, classifier, voc_type, label_col, id_col,
-                             event_col=group_col, time_col=time_col)
-        d["test_group"] = str(g)
-        out.append(d)
+        done[g] = d
         if progress:
-            mean = p.mean(0)
-            print(f"[{k + 1}/{len(groups)}] {g} ({test[label_col].iloc[0]}): predicted {m.classes[mean.argmax()]} "
-                  f"(score {decision_score(mean[None])[0]:.2f}, {len(test)} {unit})")
+            print(f"[{k + 1}/{len(groups)}] {g} ({true}): predicted {classes[mean.argmax()]} "
+                  f"(score {decision_score(mean[None])[0]:.2f}, {(d['class'] == classes[0]).sum()} {unit})")
+    out = [done[g] for g in groups if g in done]          # same order whatever order folds finish in
     preds = pd.concat(out, ignore_index=True)
     validate_output(preds)
     return preds

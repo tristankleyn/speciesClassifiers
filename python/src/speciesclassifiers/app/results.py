@@ -8,7 +8,9 @@ from nicegui import ui
 
 from speciesclassifiers.project.workflows import read_json
 
-from .widgets import field, fig_src, open_folder, path_row, table
+from nicegui import run
+
+from .widgets import ImageSlot, field, new_fig, open_folder, path_row, table
 
 _CACHE = {}
 
@@ -24,11 +26,13 @@ def _csv(path, **kw):
     return _CACHE[key]
 
 
-def _plt():
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    return plt
+def _curve(path):
+    """Threshold curve of the cross-validation predictions (cached per file version)."""
+    from speciesclassifiers.randomforest import threshold_curve
+    key = ("curve", str(path), Path(path).stat().st_mtime)
+    if key not in _CACHE:
+        _CACHE[key] = threshold_curve(_csv(path, dtype={"event_id": str}))
+    return _CACHE[key]
 
 
 def metric(label, value, fmt="{:.0%}", hint=""):
@@ -60,16 +64,16 @@ def output_row(label, path, root=None):
 
 
 # ============================================================================ random forest ==========
-def rf_results(p, saver):
+async def rf_results(p, saver):
     from speciesclassifiers.plots import plot_confusion, plot_importance
-    from speciesclassifiers.randomforest import summarise, threshold_curve
+    from speciesclassifiers.randomforest import summarise
     ui.markdown("#### Cross-validation\nEach group (encounter) was classified by a model trained without it. "
                 "Group predictions average the probabilities of its detections; **scores** measure confidence "
                 "(top probability × its lead over the second). Raise the thresholds to leave unsure detections "
                 "and groups undecided: fewer decisions, more of them right.")
     if not_ready(p, "crossval", "cross-validation results"):
         return
-    preds = _csv(p.folder / "crossval" / "cv_detection_predictions.csv", dtype={"event_id": str})
+    path = p.folder / "crossval" / "cv_detection_predictions.csv"
     dec = saver.get("decision", {})
     with ui.row().classes("items-center gap-8 w-full"):
         with ui.column().classes("w-80 gap-8"):
@@ -81,14 +85,35 @@ def rf_results(p, saver):
             s2 = ui.slider(min=0, max=0.5, step=0.01, value=dec.get("min_group_score", 0.0)).props("label-always")
             ui.label("groups below are reported as 'uncertain'").classes("text-xs text-gray-500")
     box = ui.column().classes("w-full")
-    curve = {}
+    with box:
+        ui.spinner(size="lg")
+    latest = {"n": 0}
 
-    def show():
+    def draw_conf(conf):
+        fig, ax = new_fig(4.6, 4)
+        plot_confusion(conf, "Groups (rows: true, columns: predicted)", ax=ax)
+        return fig
+
+    def draw_curve(c, mg):
+        fig, ax = new_fig(5, 3.4)
+        ax.plot(c["threshold"], c["group_accuracy"], label="group accuracy")
+        ax.plot(c["threshold"], c["mean_class_accuracy"], label="mean class accuracy")
+        ax.plot(c["threshold"], c["groups_kept"], "--", label="groups decided")
+        ax.axvline(mg, color="k", lw=0.8)
+        ax.set(xlabel="Minimum group score", ylim=(0, 1.05), title="Threshold curve")
+        ax.legend(fontsize=8)
+        return fig
+
+    async def show():
+        latest["n"] += 1
+        me = latest["n"]
         ms, mg = float(s1.value), float(s2.value)
         saver.set("decision", {"min_score": ms, "min_group_score": mg})
-        s = summarise(preds, ms, mg)
-        if "c" not in curve:
-            curve["c"] = threshold_curve(preds)
+        preds = await run.io_bound(_csv, path, dtype={"event_id": str})
+        s = await run.io_bound(summarise, preds, ms, mg)
+        c = await run.io_bound(_curve, path)
+        if me != latest["n"]:           # a newer slider move is on its way
+            return
         box.clear()
         with box:
             with ui.row().classes("gap-3"):
@@ -96,40 +121,36 @@ def rf_results(p, saver):
                 metric("Mean class accuracy", s["mean_class_accuracy"])
                 metric("Groups decided", 1 - s["groups_discarded"])
                 metric("Groups", len(s["groups"]), "{:d}")
-            plt = _plt()
             with ui.row().classes("gap-4 items-start w-full"):
-                if len(s["confusion"]):
-                    fig, ax = plt.subplots(figsize=(4.6, 4))
-                    plot_confusion(s["confusion"], "Groups (rows: true, columns: predicted)", ax=ax)
-                    ui.image(fig_src(fig)).classes("w-[26rem]")
-                c = curve["c"]
-                fig, ax = plt.subplots(figsize=(5, 3.4))
-                ax.plot(c["threshold"], c["group_accuracy"], label="group accuracy")
-                ax.plot(c["threshold"], c["mean_class_accuracy"], label="mean class accuracy")
-                ax.plot(c["threshold"], c["groups_kept"], "--", label="groups decided")
-                ax.axvline(mg, color="k", lw=0.8)
-                ax.set(xlabel="Minimum group score", ylim=(0, 1.05), title="Threshold curve")
-                ax.legend(fontsize=8)
-                ui.image(fig_src(fig)).classes("w-[28rem]")
+                conf_slot = ImageSlot("w-[26rem]") if len(s["confusion"]) else None
+                curve_slot = ImageSlot("w-[28rem]")
             g = s["groups"].assign(correct=lambda x: x["predicted"] == x["true_class"])
             g["decision"] = np.where(g["score"] >= mg, g["predicted"], "uncertain")
             with ui.expansion("Groups", icon="table_rows").classes("w-full"):
                 table(g[["event_id", "true_class", "decision", "predicted", "score", "n", "n_total", "correct"]]
                       .sort_values(["correct", "score"]), rows=15)
-    s1.on("change", lambda: show())
-    s2.on("change", lambda: show())
-    show()
+        if conf_slot:
+            await conf_slot.fill(lambda: draw_conf(s["confusion"]))
+        await curve_slot.fill(lambda: draw_curve(c, mg))
+    s1.on("change", show)
+    s2.on("change", show)
     imp = p.folder / "model" / "feature_importance.csv"
+    imp_slot = None
     if imp.is_file() and p.stage_states()["model"] == "done":
         with ui.expansion("Feature importance (final model)", icon="bar_chart").classes("w-full"):
-            fig, ax = _plt().subplots(figsize=(6, 5))
-            plot_importance(pd.read_csv(imp, index_col=0)["importance"].sort_values(ascending=False), ax=ax)
-            ui.image(fig_src(fig)).classes("w-[32rem]")
+            imp_slot = ImageSlot("w-[32rem]")
     ui.label("The thresholds are saved with the project and used when classifying new data.").classes(
         "text-sm text-gray-600")
+    await show()
+    if imp_slot:
+        def draw_imp():
+            fig, ax = new_fig(6, 5)
+            plot_importance(pd.read_csv(imp, index_col=0)["importance"].sort_values(ascending=False), ax=ax)
+            return fig
+        await imp_slot.fill(draw_imp)
 
 
-def rf_apply(p, saver, start_run):
+async def rf_apply(p, saver, start_run):
     ui.markdown("#### Classify new data\nSame format as the training data (ROCCA contour stats, or a table with "
                 "the same feature columns and a group column). Uses the thresholds chosen under Results.")
     path_row(saver, "new_data.path", "New data (file or folder)", "any", (".csv",))
@@ -139,7 +160,7 @@ def rf_apply(p, saver, start_run):
     if st["apply"] in ("done", "outdated") and grp.is_file():
         if st["apply"] == "outdated":
             ui.label("Settings or thresholds changed since: classify again to update.").classes("text-amber-700")
-        g = _csv(grp, dtype={"event_id": str})
+        g = await run.io_bound(_csv, grp, dtype={"event_id": str})
         with ui.row().classes("gap-3"):
             for k, v in g["decision"].value_counts().items():
                 metric(str(k), int(v), "{:d}", "groups")
@@ -156,9 +177,9 @@ def rf_apply(p, saver, start_run):
 
 
 # ============================================================================ call types ============
-def ct_results(p, saver):
+async def ct_results(p, saver):
     from speciesclassifiers.plots import plot_confusion
-    plt = _plt()
+    conf_slot = None
     if not_ready(p, "windows", "windows"):
         return
     ws = read_json(p.folder / "windows" / "summary.json", {})
@@ -184,13 +205,18 @@ def ct_results(p, saver):
             metric("Windows", ev.get("n_windows"), "{:d}")
         conf = _csv(p.folder / "evaluate" / "confusion.csv", index_col=0)
         if conf is not None:
-            fig, ax = plt.subplots(figsize=(4.8, 4.2))
-            plot_confusion(conf, "Call types (rows: true)", ax=ax)
-            ui.image(fig_src(fig)).classes("w-[26rem]")
+            conf_slot = ImageSlot("w-[26rem]")
+
+            def draw_conf():
+                fig, ax = new_fig(4.8, 4.2)
+                plot_confusion(conf, "Call types (rows: true)", ax=ax)
+                return fig
 
     ui.markdown("#### Discovered clusters\nWindows grouped by shape. A cluster's verdict for a label task is "
                 "given only when it is reliably one label, on enough days.")
     if not_ready(p, "discover", "clusters"):
+        if conf_slot:
+            await conf_slot.fill(draw_conf)
         return
     sc = read_json(p.folder / "discover" / "scorecard.json", {})
     tasks = saver.get("labels.tasks", []) or []
@@ -222,6 +248,8 @@ def ct_results(p, saver):
                 "verdict. Optional **rules** then override a block's decision, e.g. mark blocks whose contours "
                 "barely vary in frequency as noise. Changes apply after the next Run (library + new data).")
     decision_editor(saver)
+    if conf_slot:
+        await conf_slot.fill(draw_conf)
 
 
 BLOCK_VALUES = {"block_meanfreq_range_hz": "range of contour mean frequencies (Hz)",
@@ -273,7 +301,7 @@ def decision_editor(saver):
 
 def timeline_fig(blocks, task, block_minutes):
     """Days (rows) × time of day: one bar per block, coloured by the task's decision."""
-    plt = _plt()
+    from matplotlib.patches import Rectangle
     b = blocks.copy()
     t = pd.to_datetime(b["block_start"], unit="s", utc=True)
     b["day"] = t.dt.strftime("%Y-%m-%d")
@@ -286,7 +314,7 @@ def timeline_fig(blocks, task, block_minutes):
     for c in sorted(cats, key=lambda c: (c in fixed, c)):
         colours[c] = fixed.get(c) or palette[k % len(palette)]
         k += c not in fixed
-    fig, ax = plt.subplots(figsize=(9, 0.4 * len(days) + 1.4))
+    fig, ax = new_fig(9, 0.4 * len(days) + 1.4)
     w = block_minutes / 60
     for i, d in enumerate(days):
         g = b[b["day"] == d]
@@ -297,12 +325,12 @@ def timeline_fig(blocks, task, block_minutes):
     ax.set(yticks=range(len(days)), yticklabels=days, xlim=(0, 24), xticks=range(0, 25, 3),
            xlabel="Time of day (UTC)", ylim=(len(days) - 0.5, -0.5))
     ax.grid(axis="x", lw=0.3)
-    ax.legend(handles=[plt.Rectangle((0, 0), 1, 1, color=colours[c]) for c in colours], labels=list(colours),
+    ax.legend(handles=[Rectangle((0, 0), 1, 1, color=colours[c]) for c in colours], labels=list(colours),
               loc="upper left", bbox_to_anchor=(1.01, 1), fontsize=8, frameon=False, title=task)
     return fig
 
 
-def ct_apply(p, saver, start_run):
+async def ct_apply(p, saver, start_run):
     ui.markdown("#### Classify new data\nWhistle contours to classify with the library: PAMGuard binaries or "
                 "a contours JSON, optionally limited to a date range.")
     ui.select({"binaries": "PAMGuard binaries (folder)", "json": "Contours JSON"}, value=saver.get("new_data.source"),
@@ -322,13 +350,16 @@ def ct_apply(p, saver, start_run):
         if tasks and len(blocks):
             ui.markdown("#### Presence over time")
             sel = ui.select(tasks, value=tasks[0], label="Show").classes("w-48")
-            img = ui.image().classes("w-full max-w-4xl")
+            holder = ui.column().classes("w-full max-w-4xl")
             bm = read_json(p.folder / "library" / "library.json", {}).get("block_minutes", 10)
 
-            def draw():
-                img.set_source(fig_src(timeline_fig(blocks, sel.value, bm)))
+            async def draw():
+                holder.clear()
+                with holder:
+                    slot = ImageSlot("w-full")
+                task = sel.value
+                await slot.fill(lambda: timeline_fig(blocks, task, bm))
             sel.on_value_change(draw)
-            draw()
             with ui.row().classes("gap-3"):
                 for t in tasks:
                     for k, v in blocks[t].value_counts().items():
@@ -337,6 +368,14 @@ def ct_apply(p, saver, start_run):
         show.insert(0, "block", pd.to_datetime(show["block_start"], unit="s", utc=True).dt.strftime("%Y-%m-%d %H:%M"))
         with ui.expansion("Blocks", icon="table_rows").classes("w-full"):
             table(show.drop(columns=["block_start", "block_end"]), rows=15)
+        if tasks and len(blocks):
+            outputs(p, bl)
+            await draw()
+            return
+    outputs(p, bl)
+
+
+def outputs(p, bl):
     ui.markdown("#### Outputs\nThe library holds everything needed to classify new contours the same way. "
                 "`standalone.py` (next to it) runs it anywhere with numpy only: "
                 "`python standalone.py library.json contours.json blocks.csv`. In the project folder "

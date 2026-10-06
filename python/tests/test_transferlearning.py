@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-pytest.importorskip("imblearn")
+pytest.importorskip("sklearn")
 
 from speciesclassifiers.transferlearning import (assign_events, cross_validate, event_features, event_params,
                                                  filter_events, fit, predict, summarise, threshold_curve,

@@ -221,36 +221,54 @@ def project_page(path: str):
         with ui.tab_panels(tabs, value="data").classes("grow min-w-0") as panels:
             with ui.tab_panel("data"):
                 data_panel(p, saver, kind)
+                next_button(panels, steps, "data", names)
             if kind == "calltypes":
                 with ui.tab_panel("labels"):
                     labels_panel(p, saver)
+                    next_button(panels, steps, "labels", names)
             with ui.tab_panel("settings"):
                 settings_panel(saver, kind)
+                next_button(panels, steps, "settings", names)
             with ui.tab_panel("run"):
                 run_ui = run_panel(p)
+                run_next = ui.row()
             with ui.tab_panel("results"):
                 results_box = ui.column().classes("w-full")
+                next_button(panels, steps, "results", names)
             with ui.tab_panel("apply"):
                 apply_box = ui.column().classes("w-full")
 
-    last = {"mtime": None, "panel": None}
+    last = {"mtime": None, "panel": None, "busy": False, "states": None, "run_state": None}
 
-    def refresh_results(force=False):
+    async def refresh_results(force=False):
+        """(Re)build the results / apply panel when it's shown or the outputs changed. Heavy work runs in
+        background threads, so the page stays responsive."""
+        if last["busy"]:
+            return
         mt = p.status_path.stat().st_mtime if p.status_path.exists() else 0
         if not force and mt == last["mtime"] and panels.value == last["panel"]:
             return
         last["mtime"], last["panel"] = mt, panels.value
-        if panels.value == "results":
-            results_box.clear()
-            with results_box:
-                (results.rf_results if kind == "randomforest" else results.ct_results)(p, saver)
-        elif panels.value == "apply":
-            apply_box.clear()
-            with apply_box:
-                (results.rf_apply if kind == "randomforest" else results.ct_apply)(p, saver, start_run)
+        if panels.value not in ("results", "apply"):
+            return
+        box = results_box if panels.value == "results" else apply_box
+        last["busy"] = True
+        try:
+            box.clear()
+            with box:
+                if panels.value == "results":
+                    await (results.rf_results if kind == "randomforest" else results.ct_results)(p, saver)
+                else:
+                    await (results.rf_apply if kind == "randomforest" else results.ct_apply)(p, saver, start_run)
+        finally:
+            last["busy"] = False
 
     def refresh_status():
         states = p.stage_states()
+        savedl.text = "All changes saved" if saved["t"] else ""
+        if states == last["states"]:
+            return
+        last["states"] = states
         stage_box.clear()
         with stage_box:
             ui.label("Stages").classes("text-xs text-gray-500")
@@ -259,26 +277,50 @@ def project_page(path: str):
                 with ui.row().classes("items-center gap-1 no-wrap"):
                     ui.icon(icon).classes(col + (" animate-spin" if states[stage.name] == "running" else ""))
                     ui.label(stage.title).classes("text-sm").tooltip(STATE_TEXT[states[stage.name]])
-        savedl.text = "All changes saved" if saved["t"] else ""
 
     def start_run(stages=None, force=False):
         if p.is_running():
             ui.notify("Already running", type="warning")
             return
         start_background(p.folder, stages, force)
+        last["run_state"] = "running"
         ui.notify("Started: progress is on the Run tab. You can close the browser; it keeps running.")
         panels.value = "run"
+
+    def update_run_next():
+        st = p.status().get("run", {})
+        state = "running" if p.is_running() else st.get("state")
+        if state == last["run_state"]:
+            return
+        if last["run_state"] == "running" and state == "finished":
+            ui.notify("Run finished: see the results", type="positive")
+        last["run_state"] = state
+        run_next.clear()
+        if state == "finished" or (state is None and all(v in ("done", "skipped") for v in p.stage_states().values())):
+            with run_next:
+                ui.button(f"Next: {names['results']}", icon="arrow_forward",
+                          on_click=lambda: setattr(panels, "value", "results")).props("size=lg").classes("mt-4")
 
     run_ui["start"] = start_run
     panels.on_value_change(lambda: refresh_results(True))
 
-    def tick():
+    async def tick():
         run_ui["refresh"]()
         refresh_status()
+        update_run_next()
         if panels.value in ("results", "apply") and not p.is_running():
-            refresh_results()
+            await refresh_results()
     refresh_status()
+    update_run_next()
     ui.timer(1.0, tick)
+
+
+def next_button(panels, steps, step, names):
+    i = steps.index(step)
+    if i + 1 < len(steps):
+        nxt = steps[i + 1]
+        ui.button(f"Next: {names[nxt]}", icon="arrow_forward",
+                  on_click=lambda: setattr(panels, "value", nxt)).props("size=lg").classes("mt-6")
 
 
 # ------------------------------------------------------------------------ data / labels -----------
@@ -481,6 +523,10 @@ def run_panel(p):
             h["start"](None, True)
 
     def refresh():
+        key = tuple(f.stat().st_mtime if f.exists() else 0 for f in (p.status_path, p.log_path))
+        if key == seen.get("key") and not p.is_running():
+            return
+        seen["key"] = key
         st = p.status()
         r = st.get("run", {})
         running = p.is_running(st)
@@ -533,8 +579,11 @@ def _free_port(start=8765):
 
 
 def main(port=None, show=True):
+    import threading
+
     import matplotlib
     matplotlib.use("Agg")
+    threading.Thread(target=lambda: __import__("matplotlib.figure"), daemon=True).start()   # warm up
     app.native.window_args = {}
     ui.run(title="speciesClassifiers", port=port or _free_port(), host="127.0.0.1", reload=False, show=show,
            favicon="🐬", show_welcome_message=True)

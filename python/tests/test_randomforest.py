@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-pytest.importorskip("imblearn")
+pytest.importorskip("sklearn")
 
 from speciesclassifiers.outputs import validate_output
 from speciesclassifiers.randomforest import (RandomForestModel, RFParams, cross_validate, decision_score, fit,
