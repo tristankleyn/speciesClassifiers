@@ -166,8 +166,8 @@ RANDOMFOREST = Workflow(
     "Classify species (or any label) from measurements of individual detections, e.g. PAMGuard's ROCCA "
     "contour stats or any table of detection features. Detections are combined per encounter.",
     [Stage("data", "Read detections", rf_data, ["data"]),
-     Stage("crossval", "Cross-validation (leave one group out)", rf_crossval, ["settings"]),
-     Stage("model", "Final model", rf_model),
+     Stage("crossval", "Cross-validation (leave one group out)", rf_crossval, ["settings"], version=2),
+     Stage("model", "Final model", rf_model, version=2),
      Stage("apply", "Classify new data", rf_apply, ["new_data", "decision"], optional=True,
            enabled=lambda cfg: bool(cfg.get("new_data", {}).get("path")))],
     rf_defaults, rf_example)
