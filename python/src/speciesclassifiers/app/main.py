@@ -78,7 +78,9 @@ def open_project(folder):
 # ------------------------------------------------------------------------ home ---------------------
 def header(title="speciesClassifiers"):
     with ui.header().classes("bg-slate-800 items-center"):
-        ui.link("🐬 speciesClassifiers", "/").classes("text-white text-lg no-underline font-medium")
+        with ui.link(target="/").classes("text-white no-underline flex items-center gap-2"):
+            ui.icon("graphic_eq", size="sm")
+            ui.label("speciesClassifiers").classes("text-lg font-medium")
         ui.label(title if title != "speciesClassifiers" else "").classes("text-slate-300")
 
 
@@ -663,6 +665,11 @@ def run_panel(p, kind):
 
 
 # ------------------------------------------------------------------------ start -------------------
+FAVICON = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" '
+           'fill="#1e293b"/><path d="M5 10v4M8.5 7v10M12 4v16M15.5 8v8M19 10.5v3" stroke="#fff" '
+           'stroke-width="2" stroke-linecap="round"/></svg>')
+
+
 def _free_port(start=8765):
     for port in range(start, start + 50):
         with socket.socket() as s:
@@ -679,7 +686,7 @@ def main(port=None, show=True):
     threading.Thread(target=lambda: __import__("matplotlib.figure"), daemon=True).start()   # warm up
     app.native.window_args = {}
     ui.run(title="speciesClassifiers", port=port or _free_port(), host="127.0.0.1", reload=False, show=show,
-           favicon="🐬", show_welcome_message=True)
+           favicon=FAVICON, show_welcome_message=True)
 
 
 if __name__ in {"__main__", "__mp_main__"}:
