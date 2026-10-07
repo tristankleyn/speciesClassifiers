@@ -4,13 +4,15 @@ import numpy as np
 import pandas as pd
 from nicegui import run, ui
 
-from speciesclassifiers.calltypes.windows import PROFILE_KEY, default_features, feature_catalog
+from speciesclassifiers.calltypes.windows import PROFILE_PREFIX, default_features, feature_catalog
 
 NON_LABELS = {"none", "partial", "mixed", "untyped", "unknown", "unlabelled", "n/a", "nan", "", "AMBIGUOUS"}
 
 
 def _fmt(v):
-    return "" if v is None or not np.isfinite(v) else f"{v:.3g}"
+    if v is None or not np.isfinite(v):
+        return ""
+    return f"{v:,.0f}" if abs(v) >= 1000 else f"{v:.3g}"
 
 
 def feature_stats(project, detector):
@@ -31,8 +33,8 @@ def feature_stats(project, detector):
     out = {}
     for item in feature_catalog(detector):
         k = item["key"]
-        if k == PROFILE_KEY:
-            n = sum(c.startswith("prof_") for c in w.columns)
+        if k in PROFILE_PREFIX:
+            n = sum(c.startswith(PROFILE_PREFIX[k]) for c in w.columns)
             out[k] = {"median": f"{n} bands" if n else "", "range": ""}
             continue
         if k not in w:
@@ -70,7 +72,7 @@ def features_field(saver, spec):
         return True
 
     async def open_dialog():
-        with ui.dialog() as dlg, ui.card().classes("w-[60rem] max-w-full"):
+        with ui.dialog() as dlg, ui.card().classes("w-[72rem] max-w-full"):
             ui.label(spec["label"]).classes("text-lg font-medium")
             ui.label("Ticked features describe each window for clustering. Values are from the windows of your "
                      "data once they have been made (Run). Level-dependent features (SNR, number of clicks) "
@@ -92,7 +94,7 @@ def features_field(saver, spec):
             if not stats:
                 ui.label("No windows yet: run the project to see the values.").classes("text-xs text-gray-500")
             tbl = ui.table(columns=cols, rows=rows, row_key="key", selection="multiple",
-                           pagination=0).classes("w-full").props("dense flat")
+                           pagination=0).classes("w-full overflow-x-auto").props("dense flat")
             tbl.selected = [r for r in rows if r["key"] in set(chosen())]
 
             def set_sel(keys):

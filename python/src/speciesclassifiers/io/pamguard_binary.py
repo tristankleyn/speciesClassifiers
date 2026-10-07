@@ -139,36 +139,52 @@ def _load(path):
     return _pypamguard().load_pamguard_binary_file(str(path))
 
 
-def read_clicks(folder, periods=None, sample_rate=None, pattern=CLICK_PATTERN, progress=True, keep_wave=True):
+def read_clicks(folder, periods=None, sample_rate=None, pattern=CLICK_PATTERN, progress=True, keep_wave=True,
+                measure=None):
     """Read click detections from all click binaries under ``folder``.
 
     ``periods``: optional (start, end) Unix-s pairs to limit which files are read.
     ``keep_wave=False`` leaves the waveforms out (``wave`` None) to save memory when only times are needed.
+    ``measure``: optional function (list of waveforms, sample rate) -> DataFrame of per-click measurements
+    (e.g. ``calltypes.clicks.click_spectra``), applied file by file so the waveforms needn't be kept.
     Returns (clicks table, sample rate).
     """
-    rows, rates = [], []
+    rows, rates, parts, pending = [], [], [], []
     files = list_binaries(folder, pattern, periods)
     for k, f in enumerate(files):
         pf = _load(f)
         if not pf.data:
             continue
+        sr_file = sample_rate
         if sample_rate is None and len(pf.data) > 1:
-            sr = infer_sample_rate([d.start_sample for d in pf.data], [d.millis for d in pf.data])
-            if sr:
-                rates.append(sr)
+            sr_file = infer_sample_rate([d.start_sample for d in pf.data], [d.millis for d in pf.data])
+            if sr_file:
+                rates.append(sr_file)
+        waves = []
         for d in pf.data:
-            if keep_wave:
+            w = None
+            if keep_wave or measure is not None:
                 w = np.asarray(d.wave, float)
                 w = w[0] if w.ndim > 1 else w
-            else:
-                w = None
+            waves.append(w)
             rows.append({"start": d.millis / 1000.0, "sample_duration": d.sample_duration,
-                         "wave": w, "uid": d.uid, "file": f.name})
+                         "wave": w if keep_wave else None, "uid": d.uid, "file": f.name})
+        if measure is not None:
+            sr_use = sr_file or (rates[-1] if rates else None)
+            if sr_use:
+                parts.append(measure(waves, sr_use))
+            else:                                 # sample rate unknown so far: measure at the end
+                parts.append(None)
+                pending.append((len(parts) - 1, waves))
         if progress and (k + 1) % 50 == 0:
             print(f"  read {k + 1}/{len(files)} files")
     sr = sample_rate or _consensus(rates, "sample rate")
+    for i, waves in pending:
+        parts[i] = measure(waves, sr)
     df = pd.DataFrame(rows, columns=["start", "sample_duration", "wave", "uid", "file"])
     df.insert(1, "duration", df.pop("sample_duration") / sr if sr else np.nan)
+    if measure is not None and parts:
+        df = pd.concat([df, pd.concat(parts, ignore_index=True)], axis=1)
     return df, sr
 
 

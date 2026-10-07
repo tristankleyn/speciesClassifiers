@@ -188,6 +188,8 @@ def ct_defaults():
             "windows": {"window_s": 4.0, "overlap": 0.5, "assign_by": "overlap", "min_contours": 2,
                         "min_occupancy": 0.0, "min_longest_contour_s": 0.0, "freq_profile_bins": 32},
             "clicks": {"window_s": 10.0, "overlap": 0.5, "min_clicks": 5, "max_ici_s": 1.0, "min_ici_s": 0.0},
+            "click_spectrum": {"n_samples": 128, "nfft": 256, "fmin_hz": 5000.0, "fmax_hz": None,
+                               "profile_bands": 16},
             "features": {"whistle": None, "click": None},
             "evaluate": {"max_per_class_per_day": 150, "min_class_n": 8, "rf_trees": 300},
             "discover": {"clusterer": "agglomerative", "cosine_threshold": 0.7, "min_cluster_size": 15,
@@ -239,16 +241,23 @@ def load_whistles(source, path, start="", end=""):
     return wh.reset_index(drop=True)
 
 
-def load_clicks(source, path, start="", end=""):
+def load_clicks(source, path, start="", end="", spectrum=None):
     """Click detections (``start`` Unix s, ``duration`` s) from PAMGuard Click Detector binaries or a CSV
-    (optionally .gz; ``start`` as Unix seconds or a UTC date-time)."""
+    (optionally .gz; ``start`` as Unix seconds or a UTC date-time; optional per-click measurements such as
+    ``peak_hz``). ``spectrum``: click spectrum settings (dict) to measure each click's spectrum from the
+    binaries' waveforms (None = times only)."""
     t0 = pd.Timestamp(start, tz="UTC").timestamp() if start else None
     t1 = pd.Timestamp(end, tz="UTC").timestamp() + 86400 if end else None
     if source == "binaries":
         from speciesclassifiers.io import read_clicks
         periods = [(t0 or 0, t1 or 4e9)] if (t0 or t1) else None
-        cl, _ = read_clicks(path, periods=periods, keep_wave=False)
-        cl = cl[["start", "duration"]]
+        measure = None
+        if spectrum is not None:
+            from speciesclassifiers.calltypes.clicks import ClickSpectrumParams, click_spectra
+            sp = ClickSpectrumParams(**spectrum)
+            measure = lambda waves, sr: click_spectra(waves, sr, sp)     # noqa: E731
+        cl, _ = read_clicks(path, periods=periods, keep_wave=False, measure=measure)
+        cl = cl.drop(columns=["wave", "uid", "file"])
     else:
         cl = pd.read_csv(path)
         if "start" not in cl:
@@ -285,6 +294,11 @@ def ct_features(cfg, det):
 def ct_click_params(cfg):
     from speciesclassifiers.calltypes.clicks import ClickWindowParams
     return ClickWindowParams(**cfg["settings"].get("clicks", {}))
+
+
+def ct_click_spectrum(cfg):
+    from speciesclassifiers.calltypes.clicks import ClickSpectrumParams
+    return {**ClickSpectrumParams().to_dict(), **(cfg["settings"].get("click_spectrum") or {})}
 
 
 def _windows_file(p, det):
@@ -339,13 +353,14 @@ def ct_contours(p, cfg):
 def ct_clicks(p, cfg):
     from speciesclassifiers.calltypes.clicks import prepare_clicks
     d = cfg["data"]
-    raw = load_clicks(d.get("click_source", "binaries"), d.get("click_path", ""))
+    raw = load_clicks(d.get("click_source", "binaries"), d.get("click_path", ""), spectrum=ct_click_spectrum(cfg))
     c = prepare_clicks(raw)
     out = p.stage_dir("clicks")
     _save_pickle(c, out / "clicks.pkl")
     _write_json({"n_clicks": len(c), "days": sorted(c["day"].unique().tolist()) if len(c) else []},
                 out / "summary.json")
-    print(f"{len(c)} clicks read")
+    spec = "with spectra" if "peak_hz" in c else "times only (no waveforms: no spectral features)"
+    print(f"{len(c)} clicks read, {spec}")
 
 
 def ct_windows(p, cfg):
@@ -596,6 +611,8 @@ def ct_library_multi(p, cfg):
             ct_window_params(cfg) if whistle else ct_click_params(cfg), block_minutes=cfg["decision"]["block_minutes"],
             rules=(cfg["decision"].get("rules") or None) if whistle else None, name=cfg.get("name", "calltypes"),
             min_scores=cfg["decision"].get("min_scores") or {})
+    if "click" in libs:
+        libs["click"]["spectrum_params"] = ct_click_spectrum(cfg)
     lib = build_multi_library(libs, cfg["decision"].get("weights"), cfg["decision"]["block_minutes"],
                               cfg.get("name", "calltypes"))
     out = p.stage_dir("library")
@@ -646,7 +663,7 @@ def ct_apply_multi(p, lib, n):
         if not n.get("click_path"):
             raise ValueError("The library uses clicks: choose the new data's clicks.")
         raw["click"] = load_clicks(n.get("click_source", "binaries"), n["click_path"], n.get("start", ""),
-                                   n.get("end", ""))
+                                   n.get("end", ""), spectrum=lib["detectors"]["click"].get("spectrum_params"))
     print("Classifying " + ", ".join(f"{len(v)} {d}s" for d, v in raw.items()) + "...")
     wins, blocks = classify_multi(raw, lib)
     out = p.stage_dir("apply")
@@ -665,7 +682,8 @@ CALLTYPES = Workflow(
     "from call annotations on some days. Classifies new data in clock-aligned blocks.",
     [Stage("contours", "Read and measure contours", ct_contours,
            ["data.source", "data.path", "data.use_whistles", "settings.contours"]),
-     Stage("clicks", "Read clicks", ct_clicks, ["data.click_source", "data.click_path"], optional=True,
+     Stage("clicks", "Read clicks", ct_clicks, ["data.click_source", "data.click_path", "settings.click_spectrum"],
+           optional=True,
            enabled=lambda cfg: bool(cfg.get("data", {}).get("use_clicks"))),
      Stage("windows", "Windows, features and labels", ct_windows,
            ["labels.source", "labels.path", "labels.table_paths", "labels.table_label_col",

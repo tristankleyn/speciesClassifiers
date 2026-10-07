@@ -257,6 +257,7 @@ PARAM_LABELS = {"duration_s": "duration", "start_freq_hz": "start frequency", "e
                 "frac_down": "share falling", "n_inflections": "inflections",
                 "time_of_min_freq_rel": "time of minimum frequency", "time_of_max_freq_rel": "time of maximum frequency"}
 PROFILE_KEY = "freq_profile"
+PROFILE_PREFIX = {PROFILE_KEY: "prof_", "click_profile": "csp_"}     # keys standing for groups of columns
 
 
 def feature_catalog(detector="whistle"):
@@ -289,4 +290,5 @@ def default_features(detector="whistle"):
 def feature_columns(columns, features):
     """The window columns that the chosen feature keys stand for."""
     keys = set(features)
-    return [c for c in columns if c in keys or (PROFILE_KEY in keys and c.startswith("prof_"))]
+    pre = tuple(p for k, p in PROFILE_PREFIX.items() if k in keys)
+    return [c for c in columns if c in keys or (pre and c.startswith(pre))]

@@ -21,7 +21,9 @@ From the command line (contours as a JSON list, optionally gzipped):
 
 Libraries with clicks (several detection types) take a dict of detections per type:
     windows, blocks = classify({"whistle": contours, "click": clicks}, lib)
-where clicks are dicts with ``start`` (Unix s) and optional ``duration`` (s). From the command line, add the
+where clicks are dicts with ``start`` (Unix s), optional ``duration`` (s) and, for the spectrum features,
+either the measurements (``peak_hz``, ``centroid_hz``, ``bw3_hz``, ``bw10_hz``, ``csp_*``) or ``wave`` (the
+click's samples) and ``sample_rate``. From the command line, add the
 clicks as a CSV (``start``, optional ``duration``; optionally gzipped) and use "-" for no contours:
     python standalone.py library.json contours.json blocks.csv [windows.csv] --clicks clicks.csv
 """
@@ -398,8 +400,69 @@ def pathway_blocks(feats, contours, lib, period=None):
 
 
 # ------------------------------------------------------------------------ clicks -----------
-def prepare_clicks(raw):
-    """Click dicts (``start``, optional ``duration``) -> sorted dicts with ``start``, ``end`` and ``p``."""
+CLICK_MEASURES = ("peak_hz", "centroid_hz", "bw3_hz", "bw10_hz")
+
+
+def click_spectra(waves, sr, sp):
+    """Per-click spectral measurements, as ``clicks.click_spectra`` in the package: list of dicts."""
+    n, L = len(waves), sp["n_samples"]
+    if n == 0:
+        return []
+    fmax = min(sp.get("fmax_hz") or sr / 2, sr / 2)
+    nb = sp.get("profile_bands") or 0
+    edges = np.linspace(sp["fmin_hz"], fmax, nb + 1) if nb else None
+    pcols = [f"csp_{int(edges[k])}_{int(edges[k + 1])}" for k in range(nb)] if nb else []
+    seg = np.zeros((n, L))
+    for i, w in enumerate(waves):
+        w = np.asarray(w if w is not None else [], float).ravel()
+        if not len(w):
+            continue
+        c = int(np.argmax(np.abs(w)))
+        a = max(0, min(c - L // 2, len(w) - L))
+        x = w[a:a + L]
+        x = x - x.mean()
+        seg[i, :len(x)] = x * np.hanning(len(x)) if len(x) > 1 else x
+    nfft = max(sp["nfft"], L)
+    P = np.abs(np.fft.rfft(seg, n=nfft, axis=1)) ** 2
+    f = np.fft.rfftfreq(nfft, 1.0 / sr)
+    band = (f >= sp["fmin_hz"]) & (f <= fmax)
+    P, f = P[:, band], f[band]
+    tot = P.sum(axis=1)
+    ok = tot > 0
+    pk = np.argmax(P, axis=1)
+    pmax = P[np.arange(n), pk]
+    idx = np.arange(P.shape[1])
+    df = f[1] - f[0] if len(f) > 1 else np.nan
+    out = {"peak_hz": f[pk], "centroid_hz": (P * f).sum(axis=1) / np.where(ok, tot, 1)}
+    for name, frac in (("bw3_hz", 0.5), ("bw10_hz", 0.1)):
+        below = P < (pmax * frac)[:, None]
+        left = np.where(below & (idx < pk[:, None]), idx, -1).max(axis=1)
+        right = np.where(below & (idx > pk[:, None]), idx, P.shape[1]).min(axis=1)
+        out[name] = (right - left - 1) * df
+    if nb:
+        b = np.clip(np.digitize(f, edges) - 1, 0, nb - 1)
+        B = np.stack([P[:, b == k].sum(axis=1) for k in range(nb)], axis=1) / np.where(ok, tot, 1)[:, None]
+        for k, c in enumerate(pcols):
+            out[c] = B[:, k]
+    rows = []
+    for i in range(n):
+        rows.append({k: (float(v[i]) if ok[i] else np.nan) for k, v in out.items()})
+    return rows
+
+
+def prepare_clicks(raw, spectrum=None):
+    """Click dicts (``start``, optional ``duration``, and either per-click measurements such as ``peak_hz``
+    or ``wave`` + ``sample_rate``) -> sorted dicts with ``start``, ``end``, ``p`` and measurements."""
+    raw = list(raw)
+    if spectrum is not None and raw and "wave" in raw[0]:
+        by_sr = {}
+        for i, c in enumerate(raw):
+            by_sr.setdefault(float(c["sample_rate"]), []).append(i)
+        meas = [None] * len(raw)
+        for sr, ids in by_sr.items():
+            for i, m in zip(ids, click_spectra([raw[i]["wave"] for i in ids], sr, spectrum)):
+                meas[i] = m
+        raw = [{**c, **m} for c, m in zip(raw, meas)]
     out = []
     for c in raw:
         t = float(c["start"])
@@ -407,14 +470,25 @@ def prepare_clicks(raw):
             continue
         d = c.get("duration")
         d = 0.0 if d is None or d == "" or not np.isfinite(float(d)) else float(d)
-        out.append({"start": t, "end": t + d, "p": {"mean_freq_hz": np.nan, "duration_s": d}})
+        r = {"start": t, "end": t + d, "p": {"mean_freq_hz": np.nan, "duration_s": d}}
+        for k, v in c.items():
+            if k in CLICK_MEASURES or k.startswith("csp_"):
+                r[k] = np.nan if v is None or v == "" else float(v)
+        out.append(r)
     order = np.argsort(np.array([c["start"] for c in out]), kind="stable")
     return [out[i] for i in order]
 
 
+def _nanq(m, q):
+    m = m[np.isfinite(m)]
+    return float(np.quantile(m, q)) if len(m) else np.nan
+
+
 def click_windows(clicks, cwp):
-    """Sliding windows over prepared clicks with their inter-click interval features."""
+    """Sliding windows over prepared clicks with their inter-click interval and spectrum features."""
     L, step = cwp["window_s"], cwp["window_s"] * (1 - cwp["overlap"])
+    meas = [m for m in CLICK_MEASURES if clicks and m in clicks[0]]
+    prof = [k for k in (clicks[0] if clicks else {}) if k.startswith("csp_")]
     days = {}
     for i, c in enumerate(clicks):
         days.setdefault(_day(c["start"]), []).append(i)
@@ -432,11 +506,23 @@ def click_windows(clicks, cwp):
             d = d[(d <= cwp["max_ici_s"]) & (d > cwp.get("min_ici_s", 0.0))]
             if not len(d):
                 continue
-            out.append({"w_start": float(s), "w_end": float(s + L), "day": day, "n_clicks": int(b - a),
-                        "n_intervals": len(d), "ici_mean_s": float(d.mean()), "ici_median_s": float(np.median(d)),
-                        "ici_std_s": float(d.std(ddof=1)) if len(d) > 1 else 0.0,
-                        "ici_p05_s": float(np.quantile(d, 0.05)), "ici_p95_s": float(np.quantile(d, 0.95)),
-                        "contour_idx": idx[a:b].tolist()})
+            w = {"w_start": float(s), "w_end": float(s + L), "day": day, "n_clicks": int(b - a),
+                 "n_intervals": len(d), "ici_mean_s": float(d.mean()), "ici_median_s": float(np.median(d)),
+                 "ici_std_s": float(d.std(ddof=1)) if len(d) > 1 else 0.0,
+                 "ici_p05_s": float(np.quantile(d, 0.05)), "ici_p95_s": float(np.quantile(d, 0.95)),
+                 "contour_idx": idx[a:b].tolist()}
+            sel = idx[a:b]
+            for m in meas:
+                w[f"click_{m}_median"] = _nanq(np.array([clicks[i][m] for i in sel]), 0.5)
+            for m in ("peak_hz", "centroid_hz"):
+                if m in meas:
+                    v = np.array([clicks[i][m] for i in sel])
+                    w[f"click_{m}_iqr"] = _nanq(v, 0.75) - _nanq(v, 0.25)
+            for c in prof:
+                v = np.array([clicks[i][c] for i in sel])
+                v = v[np.isfinite(v)]
+                w[c] = float(v.mean()) if len(v) else np.nan
+            out.append(w)
     return sorted(out, key=lambda w: w["w_start"])
 
 
@@ -464,7 +550,7 @@ def merge_evidence(rows, bases, weights=None):
 
 def detector_windows(det, raw, lib):
     if det == "click":
-        ev = prepare_clicks(raw)
+        ev = prepare_clicks(raw, lib.get("spectrum_params"))
         return click_windows(ev, lib["window_params"]), ev
     contours = prepare_contours(raw, lib["contour_params"])
     return window_features(make_windows(contours, lib["window_params"]), contours, lib["window_params"],
@@ -568,7 +654,11 @@ def read_clicks_csv(path):
         except ValueError:
             dt = datetime.fromisoformat(r["start"].strip().replace("Z", "+00:00"))
             t = (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
-        out.append({"start": t, "duration": float(r["duration"]) if r.get("duration") not in (None, "") else 0.0})
+        c = {"start": t, "duration": float(r["duration"]) if r.get("duration") not in (None, "") else 0.0}
+        for k, v in r.items():
+            if k in CLICK_MEASURES or k.startswith("csp_"):
+                c[k] = float(v) if v not in (None, "") else np.nan
+        out.append(c)
     return out
 
 

@@ -59,6 +59,18 @@ CALLTYPES = [
         {"key": "settings.features.click", "label": "Click features used", "kind": "features",
          "detector": "click", "advanced": True},
     ]),
+    ("Click spectrum", [
+        {"key": "settings.click_spectrum.fmin_hz", "label": "Lowest frequency (Hz)", "kind": "number", "step": 1000,
+         "min": 0, "help": "spectrum measurements use this band only"},
+        {"key": "settings.click_spectrum.fmax_hz", "label": "Highest frequency (Hz)", "kind": "number", "step": 1000,
+         "optional": True, "help": "blank = half the sample rate"},
+        {"key": "settings.click_spectrum.n_samples", "label": "Samples per click", "kind": "int", "min": 16,
+         "advanced": True, "help": "taken around the click's peak; clicks are often ~100 samples at 96 kHz"},
+        {"key": "settings.click_spectrum.nfft", "label": "FFT length", "kind": "int", "min": 16, "advanced": True,
+         "help": "zero-padded; frequency resolution = sample rate / FFT length"},
+        {"key": "settings.click_spectrum.profile_bands", "label": "Spectrum profile bands", "kind": "int", "min": 0,
+         "advanced": True},
+    ]),
     ("Combining whistles and clicks", [
         {"key": "decision.weights.whistle", "label": "Weight of whistles", "kind": "number", "step": 0.25, "min": 0,
          "also": USE_WHISTLES, "help": "1 = full say; 0 = ignored when clicks are there too"},

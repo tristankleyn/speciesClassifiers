@@ -492,7 +492,8 @@ def ct_data_panel(p, saver):
         if d.get("use_clicks"):
             ui.markdown("##### Clicks\nA folder of PAMGuard **Click Detector** binary files (often the same folder "
                         "as the whistles), or a CSV with a `start` column (UTC; Unix seconds or date-time) and "
-                        "optionally `duration` (s).")
+                        "optionally `duration` (s). From binaries, each click's spectrum is measured too (peak "
+                        "frequency, bandwidths, band profile); a CSV can carry these as columns.")
             ui.select({"binaries": "PAMGuard binaries (folder)", "csv": "Clicks CSV (.csv or .csv.gz)"},
                       value=d.get("click_source", "binaries"), label="Source",
                       on_change=lambda e: saver.set("data.click_source", e.value)).classes("w-96")

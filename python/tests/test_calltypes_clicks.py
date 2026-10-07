@@ -30,7 +30,9 @@ def test_click_windows_ici():
 def test_feature_choice():
     keys = {f["key"] for f in feature_catalog("whistle")}
     assert "snr_db_mean" in keys and "snr_db_mean" not in default_features("whistle")
-    assert default_features("click") == ["ici_mean_s", "ici_median_s", "ici_std_s", "ici_p05_s", "ici_p95_s"]
+    assert default_features("click")[:5] == ["ici_mean_s", "ici_median_s", "ici_std_s", "ici_p05_s", "ici_p95_s"]
+    assert "click_profile" in default_features("click") and "n_clicks" not in default_features("click")
+    assert feature_columns(["csp_5000_7687", "ici_mean_s", "prof_800_1275"], ["click_profile"]) == ["csp_5000_7687"]
     cols = ["n_contours", "duration_s_mean", "prof_800_1275", "prof_1275_1750", "snr_db_mean"]
     assert feature_columns(cols, ["duration_s_mean", "freq_profile"]) == ["duration_s_mean", "prof_800_1275",
                                                                           "prof_1275_1750"]
@@ -38,6 +40,34 @@ def test_feature_choice():
     w = pd.DataFrame(rng.normal(size=(30, 3)), columns=["n_contours", "duration_s_mean", "snr_db_mean"])
     assert fit_feature_spec(w, features=["duration_s_mean"])["cols"] == ["duration_s_mean"]
     assert "snr_db_mean" not in fit_feature_spec(w, exclude_features=["snr"])["cols"]
+
+
+def test_click_spectra():
+    from speciesclassifiers.calltypes.clicks import ClickSpectrumParams, click_spectra
+    sr = 96000
+    t = np.arange(100) / sr
+    rng = np.random.default_rng(1)
+    waves = [np.sin(2 * np.pi * f * t) * np.exp(-((t - t.mean()) / 2e-4) ** 2) for f in (20000, 30000, 40000)]
+    waves += [rng.normal(size=int(rng.integers(60, 300))) for _ in range(20)] + [np.zeros(50), []]
+    m = click_spectra(waves, sr, ClickSpectrumParams())
+    assert np.allclose(m["peak_hz"][:3], [20000, 30000, 40000], atol=400)
+    assert (m["bw10_hz"][:3] >= m["bw3_hz"][:3]).all() and m.iloc[-2:].isna().all().all()
+    prof = m[[c for c in m.columns if c.startswith("csp_")]]
+    assert len(prof.columns) == 16 and np.allclose(prof.iloc[:-2].sum(axis=1), 1)
+    sa = _standalone(Path(__file__).resolve().parents[1] / "src/speciesclassifiers/calltypes/standalone.py")
+    m2 = pd.DataFrame(sa.click_spectra(waves, sr, ClickSpectrumParams().to_dict()))
+    assert np.allclose(m.to_numpy(float), m2[m.columns].to_numpy(float), equal_nan=True)
+    # windows take medians over their clicks
+    clicks = pd.DataFrame({"start": 1_717_200_000 + np.arange(23) * 0.1}).join(m.reset_index(drop=True))
+    w = click_windows(prepare_clicks(clicks), ClickWindowParams())
+    assert {"click_peak_hz_median", "click_bw3_hz_median", "click_peak_hz_iqr", "csp_5000_7687"} <= set(w.columns)
+
+
+def _standalone(path):
+    spec = importlib.util.spec_from_file_location("sa", path)
+    sa = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sa)
+    return sa
 
 
 def test_merge_evidence():
@@ -66,9 +96,7 @@ def test_standalone_matches_multi(tmp_path):
     wh, cl = load_whistles("json", c, "2024-06-03"), load_clicks("csv", k, "2024-06-03")
     period = (wh["start"].min() - 3600, wh["start"].max() + 3600)
     _, b = classify_multi({"whistle": wh, "click": cl}, lib, period)
-    spec = importlib.util.spec_from_file_location("sa", p.folder / "library" / "standalone.py")
-    sa = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(sa)
+    sa = _standalone(p.folder / "library" / "standalone.py")
     t0 = pd.Timestamp("2024-06-03", tz="UTC").timestamp()
     with gzip.open(c, "rt") as f:
         raw = {"whistle": [x for x in json.load(f) if x["start"] >= t0],
@@ -83,3 +111,4 @@ def test_standalone_matches_multi(tmp_path):
         else:
             assert (x.fillna("").astype(str) == y.fillna("").astype(str).replace("None", "")).all(), col
     assert {"Y", "E1", "E2", "noise"} <= set(b["decision"])
+    assert "click_peak_hz_median" in lib["detectors"]["click"]["feature_spec"]["cols"]

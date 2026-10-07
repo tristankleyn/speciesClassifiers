@@ -24,8 +24,8 @@ Annotation tables (one row per selection, with begin/end times relative to a rec
 - As JSON (`examples/contours_example_synthetic.json.gz`, the input of `calltypes/standalone.py`): a list of `{"start", "times", "freqs", "slice_s", "snr_db" (optional)}`.
 
 ## Clicks
-- From PAMGuard binaries: `io.read_clicks(folder, keep_wave=False)` gives `start` (Unix s), `duration` (s), `uid`, `file` (and the waveform with `keep_wave=True`).
-- As CSV (`examples/clicks_example_synthetic.csv.gz`; call types and `standalone.py --clicks`): `start` (Unix s, or a UTC date-time) and optional `duration` (s).
+- From PAMGuard binaries: `io.read_clicks(folder, keep_wave=False)` gives `start` (Unix s), `duration` (s), `uid`, `file` (and the waveform with `keep_wave=True`); `measure=` adds per-click measurements file by file (e.g. `calltypes.clicks.click_spectra`).
+- As CSV (`examples/clicks_example_synthetic.csv.gz`; call types and `standalone.py --clicks`): `start` (Unix s, or a UTC date-time), optional `duration` (s) and optional per-click spectrum measurements (`peak_hz`, `centroid_hz`, `bw3_hz`, `bw10_hz`, `csp_<lo>_<hi>`).
 
 ## Detection frames (`examples/frames_example_synthetic.csv`)
 delphinID model inputs, one row per frame: `event_id`, `frame_start`, `n_detections`, `density` (whistles), `label`, and the input bins `f1`, `f2`, .... The acoustic parameters that made them are saved next to them (`*_params.json`).
