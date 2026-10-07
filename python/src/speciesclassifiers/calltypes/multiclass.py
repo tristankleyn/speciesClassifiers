@@ -143,14 +143,15 @@ def aggregate(window_preds, classes, level="block", block_minutes=10):
 
 def performance(rows, classes, min_score=0.0):
     """Accuracy at one threshold: coverage (share decided), accuracy when decided, balanced accuracy,
-    per-class recall and the confusion matrix (rows true; columns include "uncertain")."""
+    per-class share correct and the confusion matrix (rows true). Rows left undecided by the threshold
+    ("uncertain") or without data are left out of everything except the coverage."""
     dec, score = decide(rows[[f"p_{c}" for c in classes]].to_numpy(), classes, min_score)
     true = rows["true"].to_numpy()
     decided = ~np.isin(dec, ["uncertain", "no_data"])
-    rec = {c: float(np.mean(dec[true == c] == c)) if (true == c).any() else np.nan for c in classes}
     acc_c = {c: float(np.mean(dec[(true == c) & decided] == c)) if ((true == c) & decided).any() else np.nan
              for c in classes}
-    conf = pd.crosstab(pd.Series(true, name="true"), pd.Series(dec, name="decision"))
+    rec = acc_c
+    conf = pd.crosstab(pd.Series(true[decided], name="true"), pd.Series(dec[decided], name="decision"))
     return {"n": len(rows), "coverage": float(decided.mean()) if len(rows) else np.nan,
             "accuracy": float(np.mean(dec[decided] == true[decided])) if decided.any() else np.nan,
             "balanced_accuracy": float(np.nanmean(list(acc_c.values()))) if decided.any() else np.nan,

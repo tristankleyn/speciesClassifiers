@@ -14,7 +14,43 @@ RANDOMFOREST = [
          "step": 0.05, "advanced": True, "help": "share of each class's training detections to drop as outliers"},
         {"key": "settings.seed", "label": "Random seed", "kind": "int", "advanced": True},
     ]),
+    ("Whistle measurements", [
+        {"key": "data.contours.fmin_hz", "label": "Lowest frequency (Hz)", "kind": "number", "step": 100,
+         "help": "contour points outside the band are clipped off"},
+        {"key": "data.contours.fmax_hz", "label": "Highest frequency (Hz)", "kind": "number", "step": 100},
+        {"key": "data.contours.min_contour_s", "label": "Shortest contour (s)", "kind": "number", "step": 0.1,
+         "min": 0},
+    ]),
+    ("Click measurements", [
+        {"key": "data.click_spectrum.fmin_hz", "label": "Lowest frequency (Hz)", "kind": "number", "step": 1000,
+         "help": "spectrum measurements use this band only"},
+        {"key": "data.click_spectrum.fmax_hz", "label": "Highest frequency (Hz)", "kind": "number", "step": 1000,
+         "optional": True, "help": "blank = half the sample rate"},
+        {"key": "data.max_ici_s", "label": "Longest inter-click interval (s)", "kind": "number", "step": 0.1,
+         "help": "a longer gap to the previous click counts as a pause (no interval)"},
+        {"key": "data.click_spectrum.n_samples", "label": "Samples per click", "kind": "int", "advanced": True},
+        {"key": "data.click_spectrum.nfft", "label": "FFT length", "kind": "int", "advanced": True},
+        {"key": "data.click_spectrum.profile_bands", "label": "Spectrum profile bands", "kind": "int",
+         "advanced": True},
+    ]),
+    ("Final layer (blocks)", [
+        {"key": "final.block_minutes", "label": "Block length", "kind": "select",
+         "options": {1: "1 min", 2: "2 min", 5: "5 min", 10: "10 min", 15: "15 min", 20: "20 min", 30: "30 min",
+                     60: "1 hour"}},
+        {"key": "final.n_trees", "label": "Trees", "kind": "int", "min": 10, "step": 100},
+        {"key": "final.node_size", "label": "Min blocks per leaf", "kind": "int", "min": 1, "advanced": True},
+    ]),
 ]
+for _title, _specs in RANDOMFOREST[1:]:        # binaries only
+    for _s in _specs:
+        _s.setdefault("when", ("data.type", "binaries"))
+        if _title.startswith("Whistle"):
+            _s.setdefault("also", ("data.use_whistles", True))
+        elif _title.startswith("Click"):
+            _s.setdefault("also", ("data.use_clicks", True))
+for _s in RANDOMFOREST[0][1]:
+    if _s["key"] == "settings.max_per_group":
+        _s["help"] = "picked at random, so big encounters/events don't dominate training"
 
 USE_WHISTLES = ("data.use_whistles", True)
 USE_CLICKS = ("data.use_clicks", True)
@@ -194,6 +230,22 @@ for _title, _specs in CALLTYPES:      # whistle settings only with whistles, cli
             _s.setdefault("when", USE_WHISTLES)
         elif _title.startswith(("Click", "Combining")):
             _s.setdefault("when", USE_CLICKS)
+
+def _fill_defaults(groups, defaults):
+    from speciesclassifiers.project.project import get_path
+    for _t, specs in groups:
+        for sp in specs:
+            v = get_path(defaults, sp["key"])
+            if sp.get("kind") != "features" and v is not None:
+                sp.setdefault("default", v)
+
+
+def _rf_defaults():
+    from speciesclassifiers.project.workflows import rf_defaults
+    return rf_defaults()
+
+
+_fill_defaults(RANDOMFOREST, _rf_defaults())
 
 SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID}
 # values of keys that older projects may not have yet

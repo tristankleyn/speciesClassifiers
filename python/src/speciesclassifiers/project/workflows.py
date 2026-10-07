@@ -72,13 +72,79 @@ def read_json(path, default=None):
 
 # ============================================================================ random forest ==========
 def rf_defaults():
+    from speciesclassifiers.calltypes.clicks import ClickSpectrumParams
     return {
         "data": {"type": "rocca", "path": "", "voc_type": "whistle", "label_col": "label",
-                 "group_col": "event_id", "omit": [], "classes": [], "filter_min": {}, "filter_max": {}},
+                 "group_col": "event_id", "omit": [], "classes": [], "filter_min": {}, "filter_max": {},
+                 # type "binaries": base classifiers per detection type, from detections + labelled periods
+                 "use_whistles": True, "use_clicks": False, "whistle_source": "binaries", "whistle_path": "",
+                 "click_source": "binaries", "click_path": "", "annotations": "",
+                 "contours": {"fmin_hz": 2000.0, "fmax_hz": 20000.0, "min_contour_s": 0.3, "min_snr_db": None},
+                 "click_spectrum": ClickSpectrumParams().to_dict(), "max_ici_s": 1.0},
         "settings": {"n_trees": 500, "mtry": None, "node_size": 25, "max_per_group": 25, "prune": 0.0, "seed": 42},
-        "decision": {"min_score": 0.02, "min_group_score": 0.0},
-        "new_data": {"path": ""},
+        "final": {"block_minutes": 10, "n_trees": 500, "node_size": 1},
+        "decision": {"min_score": 0.02, "min_group_score": 0.0, "min_scores": {}},
+        "new_data": {"path": "", "whistle_source": "binaries", "whistle_path": "", "click_source": "binaries",
+                     "click_path": "", "start": "", "end": ""},
     }
+
+
+def rf_binaries_example():
+    """Random forest base classifiers on whistles and clicks of the synthetic call-type example, labelled by
+    species from labelled periods, with the final forest per block."""
+    c, k = str(EXAMPLES / "contours_example_synthetic.json.gz"), str(EXAMPLES / "clicks_example_synthetic.csv.gz")
+    return {"data": {"type": "binaries", "use_whistles": True, "use_clicks": True, "whistle_source": "json",
+                     "whistle_path": c, "click_source": "csv", "click_path": k,
+                     "annotations": str(EXAMPLES / "periods_example_synthetic.csv"), "label_col": "species",
+                     "contours": {"fmin_hz": 800.0, "fmax_hz": 16000.0, "min_contour_s": 0.4}},
+            "settings": {"n_trees": 200, "node_size": 5},
+            "final": {"block_minutes": 5, "n_trees": 200},
+            "new_data": {"whistle_source": "json", "whistle_path": c, "click_source": "csv", "click_path": k,
+                         "start": "2024-06-04"}}
+
+
+def rf_types(cfg):
+    d = cfg["data"]
+    return [t for t, on in (("whistle", d.get("use_whistles", True)), ("click", d.get("use_clicks", False))) if on]
+
+
+def rf_binaries(cfg):
+    return cfg["data"].get("type") == "binaries"
+
+
+def rf_load_type(d, voc_type, src, path, periods=None, start="", end=""):
+    """Detections of one type with their features: binaries (only files overlapping ``periods``) or the
+    contours JSON / clicks CSV formats. Returns (detections, feature names)."""
+    from speciesclassifiers.randomforest.detections import (click_detections, click_feature_names,
+                                                           whistle_detections, whistle_features)
+    if voc_type == "whistle":
+        if src == "binaries":
+            from speciesclassifiers.io import read_whistles
+            raw, _ = read_whistles(path, periods=periods)
+        else:
+            raw = load_whistles(src, path)
+        det = whistle_detections(raw, {**{"min_snr_db": None}, **(d.get("contours") or {})})
+        feats = whistle_features()
+    else:
+        if src == "binaries":
+            from speciesclassifiers.calltypes.clicks import ClickSpectrumParams, click_spectra
+            from speciesclassifiers.io import read_clicks
+            sp = ClickSpectrumParams(**{**ClickSpectrumParams().to_dict(), **(d.get("click_spectrum") or {})})
+            raw, _ = read_clicks(path, periods=periods, keep_wave=False,
+                                 measure=lambda waves, sr: click_spectra(waves, sr, sp))
+            raw = raw.drop(columns=["wave", "uid", "file"])
+        else:
+            raw = load_clicks(src, path)
+        det = click_detections(raw, d.get("max_ici_s", 1.0))
+        feats = click_feature_names(det)
+    if start:
+        det = det[det["start"] >= pd.Timestamp(start, tz="UTC").timestamp()]
+    if end:
+        det = det[det["start"] < pd.Timestamp(end, tz="UTC").timestamp() + 86400]
+    det = det.reset_index(drop=True)
+    det.insert(0, "detection_id", [f"{voc_type[0]}{i}" for i in range(len(det))])
+    det.insert(1, "time", pd.to_datetime(det["start"], unit="s", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+    return det, feats
 
 
 def rf_example():
@@ -107,8 +173,46 @@ def rf_read(d, path, new=False):
     return data.reset_index(drop=True), feats, label, group
 
 
+def rf_data_binaries(p, cfg):
+    from speciesclassifiers.io import read_annotations
+    from speciesclassifiers.randomforest.detections import label_by_periods
+    d = cfg["data"]
+    lab = d.get("label_col") or "label"
+    periods = read_annotations(d["annotations"], require_label=False)
+    if lab not in periods:
+        raise ValueError(f"The annotations have no '{lab}' column; columns: {', '.join(periods.columns)}")
+    periods = periods[["event_id", "start", "end", lab]].rename(columns={lab: "label"})
+    periods["label"] = periods["label"].astype(str)
+    if d.get("classes"):
+        periods = periods[periods["label"].isin(d["classes"])]
+    spans = list(zip(periods["start"], periods["end"]))
+    out = p.stage_dir("data")
+    for f in out.glob("detections_*.pkl"):
+        f.unlink()
+    meta = {"types": [], "features": {}, "label_col": "label", "group_col": "event_id", "n_detections": {}}
+    counts = []
+    for ty in rf_types(cfg):
+        src, path = d.get(f"{ty}_source", "binaries"), d.get(f"{ty}_path", "")
+        det, feats = rf_load_type(d, ty, src, path, spans if src == "binaries" else None)
+        det = label_by_periods(det, periods)
+        det["event_id"] = det["event_id"].astype(str)
+        _save_pickle(det, out / f"detections_{ty}.pkl")
+        meta["types"].append(ty)
+        meta["features"][ty] = feats
+        meta["n_detections"][ty] = len(det)
+        c = det.groupby("label").agg(events=("event_id", "nunique"), detections=("event_id", "size"))
+        counts.append(c.add_prefix(f"{ty}_"))
+        print(f"{ty}s: {len(det)} detections in {det['event_id'].nunique()} events, {len(feats)} features")
+    tbl = pd.concat(counts, axis=1).fillna(0).astype(int).rename_axis("label").reset_index()
+    tbl.to_csv(out / "class_counts.csv", index=False)
+    meta["n_groups"] = int(periods["event_id"].nunique())
+    _write_json(meta, out / "meta.json")
+
+
 def rf_data(p, cfg):
     d = cfg["data"]
+    if rf_binaries(cfg):
+        return rf_data_binaries(p, cfg)
     data, feats, label, group = rf_read(d, d["path"])
     if d.get("classes"):
         data = data[data[label].astype(str).isin(d["classes"])]
@@ -126,15 +230,79 @@ def rf_data(p, cfg):
 def rf_crossval(p, cfg):
     from speciesclassifiers.randomforest import RFParams, cross_validate
     meta = read_json(p.folder / "data" / "meta.json")
+    if rf_binaries(cfg):
+        out = p.stage_dir("crossval")
+        for f in out.glob("cv_*.csv"):
+            f.unlink()
+        for ty in meta["types"]:
+            data = load_pickle(p.folder / "data" / f"detections_{ty}.pkl")
+            print(f"{ty.capitalize()}s: leave one event out ({data['event_id'].nunique()} events)")
+            preds = cross_validate(data, meta["features"][ty], "label", "event_id", RFParams(**cfg["settings"]),
+                                   classifier=f"randomforest-{ty}", voc_type=ty, id_col="detection_id",
+                                   time_col="time")
+            preds.to_csv(out / f"cv_{ty}.csv", index=False)
+        return
     data = load_pickle(p.folder / "data" / "detections.pkl")
     preds = cross_validate(data, meta["features"], meta["label_col"], meta["group_col"], RFParams(**cfg["settings"]),
                            classifier="randomforest", voc_type=cfg["data"]["voc_type"])
     preds.to_csv(p.stage_dir("crossval") / "cv_detection_predictions.csv", index=False)
 
 
+def rf_final(p, cfg):
+    """Final layer: the base classifiers' held-out probabilities averaged per block and type, then a balanced
+    random forest tested by leaving one event out; and the final forest on all blocks."""
+    meta = read_json(p.folder / "data" / "meta.json")
+    preds = [pd.read_csv(p.folder / "crossval" / f"cv_{ty}.csv") for ty in meta["types"]]
+    out = p.stage_dir("final")
+    final_stage(out, pd.concat(preds, ignore_index=True), meta["types"], cfg["final"])
+
+
+def final_stage(out, preds, types, fcfg):
+    """Shared by the random forest and delphinID methods: block vectors from held-out base predictions,
+    leave-one-event-out final forest, per-type comparison, and the final forest on all blocks."""
+    from speciesclassifiers.randomforest import RFParams
+    from speciesclassifiers.stacking import (block_vectors, cross_validate_final, fit_final, heldout_rows,
+                                             type_rows)
+    bm = fcfg.get("block_minutes", 10)
+    for f in [*out.glob("heldout_*"), out / "final_model.joblib", out / "importance.csv"]:
+        f.unlink(missing_ok=True)
+    blocks, feats = block_vectors(preds, bm, types)
+    blocks.to_csv(out / "blocks.csv", index=False)
+    classes = sorted(blocks["true_class"].astype(str).unique())
+    params = RFParams(n_trees=fcfg.get("n_trees", 500), node_size=fcfg.get("node_size", 1), max_per_group=None)
+    print(f"Final layer: {len(blocks)} blocks of {bm} min in {blocks['event_id'].nunique()} events; "
+          f"leave one event out")
+    cv = cross_validate_final(blocks, feats, params)
+    rows = heldout_rows(cv, classes)
+    rows.to_csv(out / "heldout_final.csv", index=False)
+    info = {"classes": classes, "unit": "event_id", "base": {c: 1 / len(classes) for c in classes}, "path": [],
+            "column": "label", "types": types, "final": True, "block_minutes": bm}
+    _write_json(info, out / "heldout_final.json")
+    for ty in types:
+        tr = type_rows(blocks, ty, classes)
+        tr.to_csv(out / f"heldout_final__{ty}.csv", index=False)
+        _write_json({**info, "type": ty, "final": False}, out / f"heldout_final__{ty}.json")
+    from speciesclassifiers.calltypes import multiclass as mc
+    for lvl in ("block", "unit"):
+        perf = mc.performance(mc.aggregate(rows, classes, lvl, bm), classes, 0.0)
+        print(f"  {lvl}s: accuracy {perf['accuracy']:.2f}, balanced {perf['balanced_accuracy']:.2f}")
+    m = fit_final(blocks, feats, params)
+    m.save(out / "final_model.joblib")
+    m.importance().rename("importance").to_csv(out / "importance.csv", index_label="feature")
+
+
 def rf_model(p, cfg):
     from speciesclassifiers.randomforest import RFParams, fit
     meta = read_json(p.folder / "data" / "meta.json")
+    if rf_binaries(cfg):
+        out = p.stage_dir("model")
+        for ty in meta["types"]:
+            data = load_pickle(p.folder / "data" / f"detections_{ty}.pkl")
+            print(f"Training the final {ty} model on all events...")
+            m = fit(data, meta["features"][ty], "label", "event_id", RFParams(**cfg["settings"]))
+            m.save(out / f"randomforest_{ty}.joblib")
+            m.importance().rename("importance").to_csv(out / f"feature_importance_{ty}.csv")
+        return
     data = load_pickle(p.folder / "data" / "detections.pkl")
     print("Training the final model on all data...")
     m = fit(data, meta["features"], meta["label_col"], meta["group_col"], RFParams(**cfg["settings"]))
@@ -144,8 +312,42 @@ def rf_model(p, cfg):
     print(f"Saved {out / 'randomforest_model.joblib'}")
 
 
+def rf_apply_binaries(p, cfg):
+    from speciesclassifiers.randomforest import RandomForestModel
+    from speciesclassifiers.randomforest.model import detection_output
+    from speciesclassifiers.stacking import block_vectors, decide_blocks
+    meta = read_json(p.folder / "data" / "meta.json")
+    n, d = cfg["new_data"], cfg["data"]
+    preds = []
+    out = p.stage_dir("apply")
+    for ty in meta["types"]:
+        path = n.get(f"{ty}_path")
+        if not path:
+            print(f"No new {ty}s chosen: skipped")
+            continue
+        det, _ = rf_load_type(d, ty, n.get(f"{ty}_source", "binaries"), path, None, n.get("start", ""),
+                              n.get("end", ""))
+        m = RandomForestModel.load(p.folder / "model" / f"randomforest_{ty}.joblib")
+        det["event_id"] = "new"
+        pr = detection_output(det, m.predict_proba(det), m.classes, f"randomforest-{ty}", ty, id_col="detection_id",
+                              time_col="time")
+        pr.to_csv(out / f"detection_predictions_{ty}.csv", index=False)
+        preds.append(pr)
+        print(f"{len(det)} new {ty}s")
+    if not preds:
+        raise ValueError("Choose the new data's detections first.")
+    fm = RandomForestModel.load(p.folder / "final" / "final_model.joblib")
+    bm = cfg["final"].get("block_minutes", 10)
+    blocks, _ = block_vectors(pd.concat(preds, ignore_index=True), bm, meta["types"], by_event=False)
+    res = decide_blocks(fm, blocks, bm, float((cfg["decision"].get("min_scores") or {}).get("final", 0.0)))
+    res.to_csv(out / "blocks.csv", index=False)
+    print(f"{len(res)} blocks: " + ", ".join(f"{k} {v}" for k, v in res["decision"].value_counts().items()))
+
+
 def rf_apply(p, cfg):
     from speciesclassifiers.randomforest import RandomForestModel, predict
+    if rf_binaries(cfg):
+        return rf_apply_binaries(p, cfg)
     m = RandomForestModel.load(p.folder / "model" / "randomforest_model.joblib")
     meta = read_json(p.folder / "data" / "meta.json")
     new, _, _, group = rf_read(cfg["data"], cfg["new_data"]["path"], new=True)
@@ -168,8 +370,11 @@ RANDOMFOREST = Workflow(
     [Stage("data", "Read detections", rf_data, ["data"]),
      Stage("crossval", "Cross-validation (leave one group out)", rf_crossval, ["settings"], version=2),
      Stage("model", "Final model", rf_model, version=2),
-     Stage("apply", "Classify new data", rf_apply, ["new_data", "decision"], optional=True,
-           enabled=lambda cfg: bool(cfg.get("new_data", {}).get("path")))],
+     Stage("final", "Final layer: random forest per block (leave one event out)", rf_final, ["final"],
+           after="crossval", optional=True, enabled=rf_binaries),
+     Stage("apply", "Classify new data", rf_apply, ["new_data", "decision", "final"], after="model", optional=True,
+           enabled=lambda cfg: bool(cfg.get("new_data", {}).get("path") or (rf_binaries(cfg) and (
+               cfg["new_data"].get("whistle_path") or cfg["new_data"].get("click_path")))))],
     rf_defaults, rf_example)
 
 

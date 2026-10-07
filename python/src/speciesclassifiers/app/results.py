@@ -67,6 +67,11 @@ def output_row(label, path, root=None):
 async def rf_results(p, saver):
     from speciesclassifiers.plots import plot_confusion, plot_importance
     from speciesclassifiers.randomforest import summarise
+    if saver.get("data.type") == "binaries":
+        from .stacked import stacked_results
+        return await stacked_results(p, saver, "A random forest per detection type on each detection's "
+                                     "measurements, tested by leaving one event out (event accuracy: the mean "
+                                     "probabilities of the event's detections).")
     ui.markdown("#### Cross-validation\nEach group (encounter) was classified by a model trained without it. "
                 "Group predictions average the probabilities of its detections; **scores** measure confidence "
                 "(top probability × its lead over the second). Raise the thresholds to leave unsure detections "
@@ -151,6 +156,19 @@ async def rf_results(p, saver):
 
 
 async def rf_apply(p, saver, start_run):
+    if saver.get("data.type") == "binaries":
+        from .stacked import stacked_apply
+        f = p.folder
+        return await stacked_apply(p, saver, start_run, [
+            ("Base model: whistles", f / "model" / "randomforest_whistle.joblib"),
+            ("Base model: clicks", f / "model" / "randomforest_click.joblib"),
+            ("Final forest", f / "final" / "final_model.joblib"),
+            ("Held-out base predictions: whistles", f / "crossval" / "cv_whistle.csv"),
+            ("Held-out base predictions: clicks", f / "crossval" / "cv_click.csv"),
+            ("Block vectors (training)", f / "final" / "blocks.csv"),
+            ("New data: block decisions", f / "apply" / "blocks.csv"),
+            ("New data: whistle predictions (standard format)", f / "apply" / "detection_predictions_whistle.csv"),
+            ("New data: click predictions (standard format)", f / "apply" / "detection_predictions_click.csv")])
     ui.markdown("#### Classify new data\nSame format as the training data (ROCCA contour stats, or a table with "
                 "the same feature columns and a group column). Uses the thresholds chosen under Results.")
     path_row(saver, "new_data.path", "New data (file or folder)", "any", (".csv",))
@@ -592,34 +610,43 @@ def _layer_data(p, name, block_minutes, min_score, variant=None):
     return meta, mc.performance(blocks, cl, min_score), mc.performance(units, cl, min_score), bcurve, ucurve
 
 
-async def layer_section(p, saver, name, block_minutes):
+async def layer_section(p, saver, name, block_minutes, variants=None, title=None, note=None):
+    """One layer's held-out results with a threshold slider (saved as ``decision.min_scores[name]``).
+    ``variants``: {held-out file stem: label} to switch between (default: the call-type layer's files)."""
     import json
-    meta = json.loads((p.folder / "discover" / f"heldout_{name}.json").read_text())
+    given = variants is not None
+    stem0 = next(iter(variants)) if given else f"discover/heldout_{name}"
+    meta = json.loads((p.folder / f"{stem0}.json").read_text())
     within = " > ".join(meta.get("path") or [])
     unit = "event" if meta.get("unit") == "event_id" else meta.get("unit", "day")
-    types = meta.get("types") or []
-    forest = saver.get("decision.method") == "forest" and (p.folder / "forest" / f"heldout_{name}.json").is_file()
-    variants = {}
-    if forest:
-        variants[f"forest/heldout_{name}"] = "Forest (final)"
-    variants[f"discover/heldout_{name}"] = "Multiplied" if forest else ("Combined" if meta.get("merged") else "")
-    for t in types if meta.get("merged") else []:
-        if (p.folder / "discover" / f"heldout_{name}__{t}.json").is_file():
-            variants[f"discover/heldout_{name}__{t}"] = {"whistle": "Whistles", "click": "Clicks"}.get(t, t)
+    types = [] if given else (meta.get("types") or [])
+    forest = not given and saver.get("decision.method") == "forest" and \
+        (p.folder / "forest" / f"heldout_{name}.json").is_file()
+    if not given:
+        variants = {}
+        if forest:
+            variants[f"forest/heldout_{name}"] = "Forest (final)"
+        variants[f"discover/heldout_{name}"] = "Multiplied" if forest else ("Combined" if meta.get("merged") else "")
+        for t in types if meta.get("merged") else []:
+            if (p.folder / "discover" / f"heldout_{name}__{t}.json").is_file():
+                variants[f"discover/heldout_{name}__{t}"] = {"whistle": "Whistles", "click": "Clicks"}.get(t, t)
     first = next(iter(variants))
     view = {"v": first}
     with ui.card().classes("w-full p-4").props("flat bordered"):
-        ui.label(f"Layer: {name}" + (f"  ·  within {within}" if within else "")).classes("text-lg font-medium")
+        ui.label(title or (f"Layer: {name}" + (f"  ·  within {within}" if within else ""))).classes(
+            "text-lg font-medium")
         ui.label(f"Classes: {', '.join(meta['classes'])}. Tested by leaving out one {unit} at a time; blocks are "
                  f"{block_minutes} min.").classes("text-sm text-gray-600")
-        if len(variants) > 1:
+        if len(variants) > 1 and note:
+            ui.label(note).classes("text-xs text-gray-500")
+        elif len(variants) > 1:
             ui.label("Each detection type is clustered on its own. " + (
                 "'Forest (final)': a random forest decides each block from the share of its windows in each "
                 "cluster, tested strictly (clusters redone without each held-out event); this is what new data "
                 "gets. 'Multiplied' multiplies each type's evidence instead." if forest else
                 "'Combined' multiplies their evidence per block (the decision new data gets). A class one type "
                 "hasn't learned counts as neutral for it.")).classes("text-xs text-gray-500")
-
+        if len(variants) > 1:
             async def pick(e):
                 view["v"] = e.value
                 await show()
@@ -668,6 +695,8 @@ async def layer_section(p, saver, name, block_minutes):
                 rec = pd.DataFrame({"class": list(bp["recall"]),
                                     "blocks: share correct": [bp["recall"][c] for c in bp["recall"]],
                                     f"{unit}s: share correct": [up["recall"].get(c) for c in bp["recall"]]})
+                ui.label("Accuracy, confusion matrix and share correct count decided blocks only; blocks below "
+                         "the minimum score are left out (see 'Blocks decided').").classes("text-xs text-gray-500")
                 with ui.row().classes("gap-4 items-start w-full"):
                     s1, s2 = ImageSlot("w-[24rem]"), ImageSlot("w-[22rem]")
                     with ui.column().classes("min-w-64"):
@@ -677,6 +706,8 @@ async def layer_section(p, saver, name, block_minutes):
             await s2.fill(lambda: draw_conf(bp["confusion"], f"{what}blocks (rows: true)"))
         sl.on("change", show)
         await show()
+        if given:
+            return box
         files = [({"whistle": "Whistles", "click": "Clicks"}.get(t, t), p.folder / "discover" / f"clusters_{name}__{t}.csv") for t in types] or \
             [("", p.folder / "discover" / f"clusters_{name}.csv")]
         if not files[0][1].is_file():

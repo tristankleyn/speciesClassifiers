@@ -72,7 +72,8 @@ def remember(folder):
 
 def open_project(folder):
     remember(Project(folder).folder)
-    ui.navigate.to(f"/project?path={Project(folder).folder}")
+    from urllib.parse import quote
+    ui.navigate.to(f"/project?path={quote(str(Project(folder).folder), safe='/:')}")
 
 
 # ------------------------------------------------------------------------ home ---------------------
@@ -193,20 +194,26 @@ async def example_dialog():
         return
     with ui.dialog() as dialog, ui.card().classes("w-[36rem]"):
         ui.label("Try an example (synthetic data)").classes("text-lg font-medium")
-        for c in ("randomforest", "delphinid", "calltypes"):
-            wf = WORKFLOWS[c]
+        from speciesclassifiers.project.workflows import rf_binaries_example
+        choices = [(c, WORKFLOWS[c].title, WORKFLOWS[c].description, WORKFLOWS[c].example)
+                   for c in ("randomforest", "delphinid", "calltypes")]
+        choices.insert(1, ("randomforest", "Random forest: whistles + clicks",
+                           "A base random forest per detection type (whistle contours, click spectra) and a final "
+                           "forest that decides each time block from both.", rf_binaries_example))
+        for i, (c, title, desc, _) in enumerate(choices):
             with ui.card().classes("w-full cursor-pointer hover:bg-slate-50").on(
-                    "click", lambda c=c: dialog.submit(c)):
-                ui.label(wf.title).classes("font-medium")
-                ui.label(wf.description).classes("text-sm text-gray-600")
-    c = await dialog
-    if not c:
+                    "click", lambda i=i: dialog.submit(i)):
+                ui.label(title).classes("font-medium")
+                ui.label(desc).classes("text-sm text-gray-600")
+    i = await dialog
+    if i is None:
         return
+    c, title, _, example = choices[i]
     k = 1
-    while (DEFAULT_PARENT / f"example {WORKFLOWS[c].title.lower()} {k}").exists():
+    while (DEFAULT_PARENT / f"example {title.lower().replace(':', '')} {k}").exists():
         k += 1
-    folder = DEFAULT_PARENT / f"example {WORKFLOWS[c].title.lower()} {k}"
-    Project.create(folder, c, name=f"Example: {WORKFLOWS[c].title}", config=WORKFLOWS[c].example())
+    folder = DEFAULT_PARENT / f"example {title.lower().replace(':', '')} {k}"
+    Project.create(folder, c, name=f"Example: {title}", config=example())
     open_project(folder)
 
 
@@ -414,17 +421,24 @@ def data_panel(p, saver, kind):
     if kind == "delphinid":
         return dl_data_panel(p, saver)
     if kind == "randomforest":
-        ui.markdown("#### Detections\nOne row per detection with its measurements, a **label** (class) and a "
-                    "**group** (encounter or other independent unit, used for testing). PAMGuard ROCCA contour "
-                    "stats files already have these (`KnownSpecies`, `EncounterID`).")
-        typ = ui.select({"rocca": "ROCCA contour stats (file or folder of RoccaContourStats*.csv)",
+        ui.markdown("#### Detections\nEither **PAMGuard binaries** (whistles and/or clicks) with labelled periods: "
+                    "a base random forest per detection type, and a final forest that decides each time block. Or "
+                    "a table with one row per detection, its measurements, a **label** (class) and a **group** "
+                    "(encounter): PAMGuard ROCCA contour stats files already have these (`KnownSpecies`, "
+                    "`EncounterID`).")
+        typ = ui.select({"binaries": "PAMGuard binaries: whistles and/or clicks, with labelled periods",
+                         "rocca": "ROCCA contour stats (file or folder of RoccaContourStats*.csv)",
                          "table": "Any table of detections (CSV)"}, value=saver.get("data.type"),
                         label="Data type", on_change=lambda e: (saver.set("data.type", e.value), opts.refresh()))
         typ.classes("w-[32rem]")
-        path_row(saver, "data.path", "File or folder", "any", (".csv",))
 
         @ui.refreshable
         def opts():
+            if saver.get("data.type") == "binaries":
+                from .stacked import detection_types_panel
+                detection_types_panel(saver)
+                return
+            path_row(saver, "data.path", "File or folder", "any", (".csv",))
             if saver.get("data.type") == "rocca":
                 field(saver, {"key": "data.voc_type", "label": "Detections are", "kind": "select",
                               "options": {"whistle": "whistles", "click": "clicks"}})
@@ -435,15 +449,16 @@ def data_panel(p, saver, kind):
                           "help": "comma-separated"})
             field(saver, {"key": "data.omit", "label": "Features to leave out", "kind": "list",
                           "help": "comma-separated column names"})
+
+            async def check():
+                out.clear()
+                with out:
+                    ui.spinner()
+                r = await run.io_bound(checks.check_rf_data, saver.project.config()["data"])
+                show_check(out, r)
+            ui.button("Check data", icon="fact_check", on_click=check)
+            out = ui.column().classes("w-full")
         opts()
-        async def check():
-            out.clear()
-            with out:
-                ui.spinner()
-            r = await run.io_bound(checks.check_rf_data, saver.project.config()["data"])
-            show_check(out, r)
-        ui.button("Check data", icon="fact_check", on_click=check)
-        out = ui.column().classes("w-full")
     else:
         ct_data_panel(p, saver)
 

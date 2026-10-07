@@ -25,17 +25,18 @@ def test_create_and_config(tmp_path):
     assert cfg["settings"]["node_size"] == 25                     # defaults kept
     with pytest.raises(FileExistsError):
         Project.create(p.folder, "randomforest")
-    assert set(p.stage_states().values()) == {"pending"}
+    assert set(p.stage_states().values()) == {"pending", "skipped"}     # final layer: binaries only
 
 
 def test_rf_run_resume_and_outdated(tmp_path):
     p = _rf(tmp_path)
     assert run(p.folder) == "finished"
-    assert set(p.stage_states().values()) == {"done"}
+    assert set(p.stage_states().values()) == {"done", "skipped"}     # final layer: binaries only
     g = pd.read_csv(p.folder / "apply" / "new_group_predictions.csv")
     assert {"decision", "predicted", "score"} <= set(g.columns)
     p.update_config({"decision": {"min_group_score": 0.3}})      # threshold: only "apply" is affected
-    assert p.stage_states() == {"data": "done", "crossval": "done", "model": "done", "apply": "outdated"}
+    assert p.stage_states() == {"data": "done", "crossval": "done", "model": "done", "final": "skipped",
+                                "apply": "outdated"}
     run(p.folder)
     log = p.log_path.read_text()
     assert "Cross-validation (leave one group out): up to date" in log
