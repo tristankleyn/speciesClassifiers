@@ -189,9 +189,10 @@ def ct_defaults():
             "evaluate": {"max_per_class_per_day": 150, "min_class_n": 8, "rf_trees": 300},
             "discover": {"clusterer": "agglomerative", "cosine_threshold": 0.7, "min_cluster_size": 15,
                          "euclid_outlier_q": 0.95},
-            "reliability": {"prior_strength": 10, "ci": 0.9, "min_label_days": 2},
+            "reliability": {"prior_strength": 10, "ci": 0.9, "min_label_days": 2, "unit": "event_id",
+                            "balanced": True},
         },
-        "decision": {"block_minutes": 10, "rules": []},
+        "decision": {"block_minutes": 10, "rules": [], "min_scores": {}},
         "new_data": {"source": "binaries", "path": "", "start": "", "end": ""},
     }
 
@@ -234,7 +235,11 @@ def load_whistles(source, path, start="", end=""):
 
 
 def load_calls(lab):
+    """Call annotations (``source`` "csv" or "tables") or labelled periods (``source`` "periods": a CSV with
+    ``event_id, start, end`` and label columns such as ``species``; no call types needed)."""
     from speciesclassifiers.io import read_annotations
+    if lab["source"] == "periods":
+        return read_annotations(lab["path"], require_label=False)
     if lab["source"] == "csv":
         return read_annotations(lab["path"])
     from speciesclassifiers.io.annotation_tables import read_annotation_table
@@ -246,7 +251,8 @@ def load_calls(lab):
 def other_label_columns(calls, lab):
     if lab.get("other_labels") is not None:
         return list(lab["other_labels"])
-    return [c for c in calls.columns if c not in ("event_id", "label", "start", "end", "uncertain")]
+    skip = ("event_id", "start", "end", "uncertain") + (() if lab.get("source") == "periods" else ("label",))
+    return [c for c in calls.columns if c not in skip]
 
 
 def ct_window_params(cfg):
@@ -275,7 +281,13 @@ def ct_windows(p, cfg):
     w = window_features(make_windows(c, wp), c, pts, wp)
     calls = load_calls(cfg["labels"])
     carry = other_label_columns(calls, cfg["labels"])
-    w = label_windows(w, calls, wp, carry=carry)
+    if cfg["labels"]["source"] == "periods":     # each window takes the labels of the period it falls in
+        from speciesclassifiers.calltypes.windows import label_windows_by_period
+        cols = ["event_id"] + [c for c in carry if c != "event_id"]
+        w = label_windows_by_period(w.assign(label="none"), calls, columns=cols)
+        w.loc[w["label_source"] != "unannotated", "label"] = "untyped"     # no call types
+    else:
+        w = label_windows(w, calls, wp, carry=list(dict.fromkeys([*carry, "event_id"])))
     days = sorted(pd.to_datetime(calls["start"], unit="s", utc=True).dt.strftime("%Y%m%d").unique())
     out = p.stage_dir("windows")
     _save_pickle(w, out / "windows.pkl")
@@ -283,7 +295,8 @@ def ct_windows(p, cfg):
     pd.crosstab(w["label"], w["day"]).to_csv(out / "labels_by_day.csv")
     _write_json({"n_windows": len(w), "annotated_days": days, "other_labels": carry, "n_calls": len(calls),
                  "label_counts": w["label"].value_counts().to_dict()}, out / "summary.json")
-    print(f"{len(w)} windows; {len(calls)} annotated calls on {len(days)} days")
+    what = "labelled periods" if cfg["labels"]["source"] == "periods" else "annotated calls"
+    print(f"{len(w)} windows; {len(calls)} {what} on {len(days)} days")
 
 
 def ct_evaluate(p, cfg):
@@ -319,10 +332,14 @@ def ct_discover(p, cfg):
     pool = discovery_pool(w, days, include_unannotated_days=cfg["labels"].get("include_unannotated_days", True))
     print(f"Clustering {len(pool)} windows...")
     tasks = ct_tasks(cfg)
-    r = discover(pool, DiscoverParams(**cfg["settings"]["discover"]), tasks,
-                 ReliabilityParams(**cfg["settings"]["reliability"]))
+    rp = ReliabilityParams(**{**cfg["settings"]["reliability"], "block_minutes": cfg["decision"]["block_minutes"]})
+    r = discover(pool, DiscoverParams(**cfg["settings"]["discover"]), tasks, rp)
     out = p.stage_dir("discover")
     _save_pickle(r, out / "discover.pkl")
+    for name, m in r.get("multiclass", {}).items():      # held-out predictions, for the app's curves
+        if len(m.get("window_preds", [])):
+            m["window_preds"].to_csv(out / f"heldout_{name}.csv", index=False)
+            _write_json({"classes": m["classes"], "unit": m["unit"], "base": m["base"]}, out / f"heldout_{name}.json")
     r["summary"].to_csv(out / "clusters.csv", index=False)
     _write_json(r["scorecard"], out / "scorecard.json")
     if len(r["decision_windows"]):
@@ -336,7 +353,8 @@ def ct_library(p, cfg):
     lib = build_library(r, ContourParams(**cfg["settings"]["contours"]), ct_window_params(cfg), ct_tasks(cfg),
                         block_minutes=cfg["decision"]["block_minutes"], rules=cfg["decision"].get("rules") or None,
                         requires={k: tuple(v) for k, v in (cfg["labels"].get("requires") or {}).items()},
-                        name=f"{cfg.get('name', 'calltypes')}")
+                        name=f"{cfg.get('name', 'calltypes')}",
+                        min_scores=cfg["decision"].get("min_scores") or {})
     out = p.stage_dir("library")
     save_library(lib, out / "library.json")
     import shutil
@@ -373,7 +391,8 @@ CALLTYPES = Workflow(
             "labels.table_keep_cols", "labels.other_labels", "settings.windows"]),
      Stage("evaluate", "Evaluate labelled call types", ct_evaluate, ["settings.evaluate"]),
      Stage("discover", "Discover (cluster + verdicts)", ct_discover,
-           ["labels.tasks", "labels.include_unannotated_days", "settings.discover", "settings.reliability"],
+           ["labels.tasks", "labels.include_unannotated_days", "settings.discover", "settings.reliability",
+            "decision.block_minutes"],
            after="windows"),
      Stage("library", "Build library", ct_library, ["decision", "labels.requires"]),
      Stage("apply", "Classify new data", ct_apply, ["new_data"], optional=True,

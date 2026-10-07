@@ -263,6 +263,15 @@ def _vote(preds, labels):
     return (top if n[top] > tot / 2 else "uncertain"), n[top] / tot, n
 
 
+def _decide(mean, classes, min_score):
+    """Mean class probabilities -> (decision, score); score = p1 x (p1 - p2)."""
+    if np.isnan(mean).all():
+        return "uncertain", None
+    srt = np.sort(mean)
+    score = float(srt[-1] * (srt[-1] - (srt[-2] if len(srt) > 1 else 0.0)))
+    return (classes[int(np.argmax(mean))] if score >= min_score else "uncertain"), score
+
+
 def _median(v):
     v = [x for x in v if x is not None and np.isfinite(x)]
     return float(np.median(v)) if v else None
@@ -293,6 +302,16 @@ def blocks_from_windows(windows, contours, lib, period=None):
              "block_median_contour_s": float(np.median([contours[j]["p"]["duration_s"] for j in cidx]))
              if cidx else None}
         for t in lib["tasks"]:
+            if t.get("classes"):      # multi-class: mean class probabilities of the assigned windows
+                classes = t["classes"]
+                P = np.array([[w[f"{t['name']}_p_{c}"] for c in classes] for w in ws if w["cluster"] >= 0], float)
+                mean = P.mean(axis=0) if len(P) else np.full(len(classes), np.nan)
+                for c, v in zip(classes, mean):
+                    r[f"{t['name']}_p_{c}"] = None if np.isnan(v) else float(v)
+                dec, score = _decide(mean, classes, t.get("min_score", 0.0))
+                r[f"{t['name']}_score"] = score
+                r[f"raw_{t['name']}"] = dec if ws else "no_detections"
+                continue
             dec, share, n = _vote([w[f"{t['name']}_pred"] for w in ws], (t["positive"], t["negative"]))
             r[f"{t['name']}_n_{t['positive']}"] = n[t["positive"]]
             r[f"{t['name']}_n_{t['negative']}"] = n[t["negative"]]
@@ -332,6 +351,8 @@ def classify(raw_contours, lib, period=None):
         f["cluster"], f["cos_dist"], f["euc_dist"] = int(i), dc, de
         for t in lib["tasks"]:
             f[f"{t['name']}_pred"] = byid[int(i)]["verdicts"][t["name"]]["verdict"] if i >= 0 else "uncertain"
+            for c in t.get("classes") or []:
+                f[f"{t['name']}_p_{c}"] = byid[int(i)]["verdicts"][t["name"]]["probs"][c] if i >= 0 else np.nan
     return feats, blocks_from_windows(feats, contours, lib, period)
 
 

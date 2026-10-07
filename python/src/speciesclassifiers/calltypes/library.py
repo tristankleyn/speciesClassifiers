@@ -72,7 +72,7 @@ def check_rules(rules):
 
 # ------------------------------------------------------------------------ build ------------
 def build_library(result, contour_params: ContourParams, window_params: WindowParams, tasks,
-                  block_minutes=10, rules=None, requires=None, detector=None, name=None):
+                  block_minutes=10, rules=None, requires=None, detector=None, name=None, min_scores=None):
     """Freeze a ``discover`` result into a library (dict; save with ``save_library``).
 
     result          output of ``discover`` (clusters, verdicts, feature transform, scaler, weights)
@@ -83,6 +83,7 @@ def build_library(result, contour_params: ContourParams, window_params: WindowPa
                     in order; the first that matches sets every task's decision to its "then" value
     requires        optional {task: (other task, value)}: report the task only in blocks where the
                     other task's decision is that value (e.g. {"ecotype": ("species", "KW")}), else "n/a"
+    min_scores      multi-class tasks: {task: minimum block score} to decide (score = p1 x (p1 - p2)); default 0
     detector        optional {"sample_rate", "fft", "hop"} of the whistle detector, for converting peak
                     bins / slice numbers to Hz / s with ``standalone.contour_from_bins``
     """
@@ -109,9 +110,16 @@ def build_library(result, contour_params: ContourParams, window_params: WindowPa
                  "members": _b64_f32(Xs[idx]), "verdicts": {}}
         for t in tasks:
             r = rel.loc[c]
-            entry["verdicts"][t.name] = {
-                "verdict": str(r[f"{t.name}_verdict"]), "p_positive": float(r[f"{t.name}_p_{t.positive}"]),
-                "n_positive": int(r[f"{t.name}_n_{t.positive}"]), "n_negative": int(r[f"{t.name}_n_{t.negative}"])}
+            if t.binary:
+                entry["verdicts"][t.name] = {
+                    "verdict": str(r[f"{t.name}_verdict"]), "p_positive": float(r[f"{t.name}_p_{t.positive}"]),
+                    "n_positive": int(r[f"{t.name}_n_{t.positive}"]), "n_negative": int(r[f"{t.name}_n_{t.negative}"])}
+            else:
+                classes = result["multiclass"][t.name]["classes"]
+                entry["verdicts"][t.name] = {
+                    "verdict": str(r[f"{t.name}_verdict"]),
+                    "probs": {cl: float(r[f"{t.name}_p_{cl}"]) for cl in classes},
+                    "n": {cl: int(r[f"{t.name}_n_{cl}"]) for cl in classes}}
         clusters.append(entry)
     requires = {k: list(v) for k, v in (requires or {}).items()}
     names = [t.name for t in tasks]
@@ -129,7 +137,9 @@ def build_library(result, contour_params: ContourParams, window_params: WindowPa
         "cosine_threshold": float(result["params"].cosine_threshold),
         "block_minutes": block_minutes,
         "vote_rule": "strict majority of non-uncertain window predictions",
-        "tasks": [{"name": t.name, "positive": t.positive, "negative": t.negative} for t in tasks],
+        "tasks": [{"name": t.name, "positive": t.positive, "negative": t.negative} if t.binary else
+                  {"name": t.name, "classes": result["multiclass"][t.name]["classes"],
+                   "min_score": float((min_scores or {}).get(t.name, 0.0))} for t in tasks],
         "requires": requires,
         "rules": check_rules(rules),
         "detector": detector,
@@ -153,6 +163,13 @@ def load_library(path):
     if lib.get("format") != LIBRARY_FORMAT:
         raise ValueError(f"{path} is not a call-type library ({LIBRARY_FORMAT})")
     return lib
+
+
+def with_min_scores(lib, min_scores):
+    """A copy of the library with different block decision thresholds for multi-class tasks."""
+    tasks = [{**t, "min_score": float(min_scores.get(t["name"], t.get("min_score", 0.0)))} if t.get("classes")
+             else t for t in lib["tasks"]]
+    return {**lib, "tasks": tasks}
 
 
 def with_rules(lib, rules):
@@ -203,6 +220,9 @@ def classify_windows(windows, lib):
     for t in lib["tasks"]:
         w[f"{t['name']}_pred"] = [byid[i]["verdicts"][t["name"]]["verdict"] if i >= 0 else "uncertain"
                                   for i in ids]
+        for c in t.get("classes") or []:      # multi-class: the cluster's probability of each class
+            w[f"{t['name']}_p_{c}"] = [byid[i]["verdicts"][t["name"]]["probs"][c] if i >= 0 else np.nan
+                                       for i in ids]
     return w
 
 
@@ -213,6 +233,15 @@ def _vote(preds, labels):
         return "uncertain", None, n
     top = max(labels, key=lambda lab: n[lab])
     return (top if n[top] > tot / 2 else "uncertain"), n[top] / tot, n
+
+
+def _decide(mean, classes, min_score):
+    """Mean class probabilities -> (decision, score); score = p1 x (p1 - p2)."""
+    if np.isnan(mean).all():
+        return "uncertain", None
+    srt = np.sort(mean)
+    score = float(srt[-1] * (srt[-1] - (srt[-2] if len(srt) > 1 else 0.0)))
+    return (classes[int(np.argmax(mean))] if score >= min_score else "uncertain"), score
 
 
 def _median(v):
@@ -268,6 +297,17 @@ def block_votes(windows, contours, lib, period=None):
              "block_median_freq_hz": _median(g["pts_mean_freq_hz"]) if len(wi) else None,
              "block_median_contour_s": float(np.median(dur[cidx])) if len(cidx) else None}
         for t in tasks:
+            if t.get("classes"):      # multi-class: mean class probabilities of the assigned windows
+                classes = t["classes"]
+                P = g[[f"{t['name']}_p_{c}" for c in classes]].to_numpy(float) if len(wi) else np.empty((0, len(classes)))
+                P = P[~np.isnan(P).all(axis=1)] if len(P) else P
+                mean = P.mean(axis=0) if len(P) else np.full(len(classes), np.nan)
+                for c, v in zip(classes, mean):
+                    r[f"{t['name']}_p_{c}"] = None if np.isnan(v) else float(v)
+                dec, score = _decide(mean, classes, t.get("min_score", 0.0))
+                r[f"{t['name']}_score"] = score
+                r[f"raw_{t['name']}"] = dec if len(wi) else "no_detections"
+                continue
             dec, share, n = _vote(g[f"{t['name']}_pred"].tolist() if len(wi) else [], (t["positive"], t["negative"]))
             r[f"{t['name']}_n_{t['positive']}"] = n[t["positive"]]
             r[f"{t['name']}_n_{t['negative']}"] = n[t["negative"]]
@@ -337,8 +377,13 @@ def standard_output(windows, lib, event_col=None, classifier_prefix="calltypes")
     time = pd.to_datetime(w["w_start"], unit="s", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ").to_numpy()
     rows = []
     for t in lib["tasks"]:
-        p = np.array([byid[c]["verdicts"][t["name"]]["p_positive"] for c in w["cluster"]], float)
-        for cls, prob in ((t["positive"], p), (t["negative"], 1 - p)):
+        if t.get("classes"):
+            pairs = [(cls, np.array([byid[c]["verdicts"][t["name"]]["probs"][cls] for c in w["cluster"]], float))
+                     for cls in t["classes"]]
+        else:
+            p = np.array([byid[c]["verdicts"][t["name"]]["p_positive"] for c in w["cluster"]], float)
+            pairs = ((t["positive"], p), (t["negative"], 1 - p))
+        for cls, prob in pairs:
             rows.append(pd.DataFrame({"detection_id": det, "event_id": ev, "time": time,
                                       "classifier": f"{classifier_prefix}-{t['name']}", "voc_type": "whistle",
                                       "class": cls, "probability": prob, "cluster": w["cluster"].to_numpy()}))

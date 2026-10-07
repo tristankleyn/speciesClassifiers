@@ -59,12 +59,26 @@ class DiscoverParams:
 
 @dataclass
 class LabelTask:
-    """A binary label to judge per cluster, e.g. LabelTask("species", "species", "KW", "Humpback")."""
+    """A label each cluster is judged on.
+
+    Binary (as for killer whales): ``LabelTask("species", "species", "KW", "Humpback")``.
+    Multi-class: ``LabelTask("species", "species")`` uses every value of the column (except non-labels
+    such as "none" and the values in ``exclude``), or ``classes=[...]`` to list them.
+    """
 
     name: str
     column: str
-    positive: str
-    negative: str
+    positive: str = None
+    negative: str = None
+    classes: list = None
+    exclude: list = None
+
+    @property
+    def binary(self):
+        return self.positive is not None and self.negative is not None and not self.classes
+
+    def to_dict(self):
+        return asdict(self)
 
 
 @dataclass
@@ -76,6 +90,10 @@ class ReliabilityParams:
     ci                credible interval width
     min_label_days    a verdict needs its label from at least this many days
     decision_windows  periods over which held-out window predictions are combined (majority vote)
+    unit              independent unit for testing and capping: "day", or a column such as "event_id"
+                      (multi-class tasks; binary tasks always use days)
+    balanced          multi-class: every class counts equally (else common classes are favoured)
+    block_minutes     multi-class: block length for testing block decisions
     """
 
     cap_per_day: int = 50
@@ -83,6 +101,9 @@ class ReliabilityParams:
     ci: float = 0.90
     min_label_days: int = 2
     decision_windows: tuple = ("1min", "2min", "5min", "10min", "20min")
+    unit: str = "day"
+    balanced: bool = True
+    block_minutes: int = 10
 
     def to_dict(self):
         return asdict(self)
@@ -118,7 +139,7 @@ def _blocks(w, block_min):
 
 
 # ------------------------------------------------------------------------ clustering -------
-def hybrid_cluster(X, w, params: DiscoverParams):
+def hybrid_cluster(X, w, params: DiscoverParams, weight_labels=None):
     """Importance-weighted cosine clustering + Euclidean outlier check.
 
     Returns (clusters, state): state holds the scaler (mean, scale), feature weights, per-cluster
@@ -130,11 +151,12 @@ def hybrid_cluster(X, w, params: DiscoverParams):
     mean, scale = Xa.mean(axis=0), Xa.std(axis=0)
     scale[scale == 0] = 1.0
     Xs = (Xa - mean) / scale
-    lab = (w["label"] != "unlabelled").to_numpy()
-    if len(np.unique(w.loc[lab, "label"])) >= 2:            # weights learned from known call types
+    labels = w["label"] if weight_labels is None else pd.Series(weight_labels, index=w.index)
+    lab = (labels != "unlabelled").to_numpy()
+    if len(np.unique(labels[lab])) >= 2:            # weights learned from known call types (or another label)
         from sklearn.ensemble import RandomForestClassifier
         rf = RandomForestClassifier(300, class_weight="balanced", min_samples_leaf=2, n_jobs=-1,
-                                    random_state=params.random_state).fit(Xs[lab], w.loc[lab, "label"])
+                                    random_state=params.random_state).fit(Xs[lab], labels[lab])
         wts = np.sqrt(rf.feature_importances_ / rf.feature_importances_.mean())
         top = pd.Series(rf.feature_importances_, index=X.columns).sort_values(ascending=False)
         print(f"  feature weights from {lab.sum()} labelled windows; top: {', '.join(top.index[:5])}")
@@ -424,30 +446,73 @@ def discover(pool, params: DiscoverParams = None, tasks=(), rp: ReliabilityParam
     ``calltype_by_cluster``, ``params``, and ``state`` (feature spec, scaler, weights, thresholds: what the library
     needs).
     """
+    from . import multiclass as mc
+
     params = params or DiscoverParams()
     rp = rp or ReliabilityParams()
+    binary = [t for t in tasks if t.binary]
+    multi = [t for t in tasks if not t.binary]
     w = pool
+    known_mask = (w["label"] != "unlabelled").to_numpy().copy()
+    for t in multi:
+        known_mask |= w[t.column].astype(str).isin(mc.task_classes(w, t)).to_numpy()
     if len(w) > params.max_windows:
-        known = np.where(w["label"] != "unlabelled")[0]
-        unl = np.where(w["label"] == "unlabelled")[0]
+        known, unl = np.where(known_mask)[0], np.where(~known_mask)[0]
         pick = np.random.default_rng(params.random_state).choice(
-            unl, max(params.max_windows - len(known), 0), replace=False)
+            unl, max(min(params.max_windows - len(known), len(unl)), 0), replace=False)
         w = w.iloc[np.sort(np.r_[known, pick])].reset_index(drop=True)
         print(f"  subsampled to {len(w)} windows (max_windows)")
     spec = fit_feature_spec(w, params.exclude_features)
     X = apply_feature_spec(w, spec)
-    cl, state = hybrid_cluster(X, w, params)
+    weight_labels = None
+    if (w["label"] != "unlabelled").sum() == 0 or w.loc[w["label"] != "unlabelled", "label"].nunique() < 2:
+        if multi:     # no call types: learn feature weights from the first multi-class label instead
+            t = multi[0]
+            v = w[t.column].astype(str)
+            weight_labels = np.where(v.isin(mc.task_classes(w, t)), v, "unlabelled")
+            print(f"  no call types: feature weights from '{t.column}'")
+    cl, state = hybrid_cluster(X, w, params, weight_labels)
     summ, examples, w = summarise_clusters(w, cl, state["Zu"], params, tasks)
-    rel = cluster_label_reliability(w, tasks, rp) if tasks else pd.DataFrame(index=sorted(set(cl) - {-1}))
+    parts = [cluster_label_reliability(w, binary, rp)] if binary else []
+    multi_res = {}
+    for t in multi:
+        st = mc.class_stats(w, t, rp)
+        parts.append(st)
+        classes = st.attrs["classes"]
+        res = {"classes": classes, "base": st.attrs["base"], "unit": mc.unit_col(rp)}
+        if loo:
+            wp = mc.loo_multiclass(w, t, rp)
+            res["window_preds"] = wp
+            if len(wp):
+                for level in ("window", "block", "unit"):
+                    rows = mc.aggregate(wp, classes, level, rp.block_minutes)
+                    res[f"{level}_rows"] = rows
+                    perf = mc.performance(rows, classes, 0.0)
+                    res[f"{level}_performance"] = {k: v for k, v in perf.items() if k not in ("decisions", "scores")}
+        multi_res[t.name] = res
+    rel = pd.concat(parts, axis=1) if parts else pd.DataFrame(index=sorted(set(cl) - {-1}))
     summ = summ.merge(rel, left_on="cluster", right_index=True, how="left")
-    loo_day, loo_all, wp = loo_label_prediction(w, tasks, rp) if (loo and tasks) else (pd.DataFrame(), pd.DataFrame(), {})
-    dwp = decision_window_performance(wp, tasks, rp) if wp else pd.DataFrame()
-    sc = scorecard(w, cl, state["Dc"], loo_all, rel, tasks)
+    loo_day, loo_all, wp = loo_label_prediction(w, binary, rp) if (loo and binary) else (pd.DataFrame(), pd.DataFrame(), {})
+    dwp = decision_window_performance(wp, binary, rp) if wp else pd.DataFrame()
+    sc = scorecard(w, cl, state["Dc"], loo_all, rel, binary)
     if len(dwp):
         for _, r in dwp[(dwp["class"] == "overall") & (dwp["decision_window"] != "window")].iterrows():
             sc[f"{r['task']}_skill_{r['decision_window']}"] = r["skill"]
+    for t in multi:
+        from sklearn.metrics import adjusted_mutual_info_score
+        r = multi_res[t.name]
+        L = w[(w["cluster"] >= 0) & w[t.column].astype(str).isin(r["classes"])]
+        sc[f"{t.name}_ami"] = adjusted_mutual_info_score(L[t.column].astype(str), L["cluster"]) if len(L) > 1 else np.nan
+        v = rel.loc[rel.index >= 0, f"{t.name}_verdict"] if f"{t.name}_verdict" in rel else pd.Series(dtype=str)
+        sc[f"{t.name}_clusters_with_verdict"] = int((v.notna() & (v != "uncertain")).sum())
+        for level in ("window", "block", "unit"):
+            perf = r.get(f"{level}_performance")
+            if perf:
+                sc[f"{t.name}_{level}_coverage"] = perf["coverage"]
+                sc[f"{t.name}_{level}_accuracy"] = perf["accuracy"]
+                sc[f"{t.name}_{level}_balanced_accuracy"] = perf["balanced_accuracy"]
     lab = w[w["label"] != "unlabelled"]
     state = {**state, "spec": spec, "X": X}
     return {"windows": w, "summary": summ, "reliability": rel, "examples": examples, "loo_by_day": loo_day,
-            "loo_summary": loo_all, "decision_windows": dwp, "scorecard": sc,
+            "loo_summary": loo_all, "decision_windows": dwp, "scorecard": sc, "multiclass": multi_res,
             "calltype_by_cluster": pd.crosstab(lab["label"], lab["cluster"]), "state": state, "params": params}
