@@ -41,3 +41,6 @@ Results → **Advanced diagnostics** opens a page over the held-out (cross-valid
 - The page shows frames kept and events decided, frame and event accuracy (kept / decided only), confusion matrices, per-class results, the events, and the distribution of any measurement for correct and wrong frames, with the filtered-out range greyed.
 
 Filters are saved with the project; they don't change the model. With several detection types, switch between them at the top.
+
+## Classify new data (one detection type)
+The last step, **Classify new data · export**, takes a folder of PAMGuard binaries of the detection type the model was trained on (Whistle and Moan Detector or Click Detector), optionally limited to a date range. Frames are made with the training settings, the model zip predicts each frame (as PAMGuard would), and each clock-aligned block (default 1 min) gets the mean of its frames' probabilities. A block is `uncertain` if it has fewer than the minimum frames or its score (top probability × lead over the second) is below the minimum. Outputs: `apply/blocks.csv` and `apply/frame_predictions.csv` (standard format), plus a presence timeline.

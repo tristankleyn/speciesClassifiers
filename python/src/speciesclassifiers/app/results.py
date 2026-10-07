@@ -574,6 +574,7 @@ async def dl_export(p, saver, start_run):
                     "model on the Whistle and Moan Detector, click model on the Click Detector); the final forest "
                     "runs here.").classes("text-sm text-gray-600")
         return
+    await dl_classify_new(p, saver, start_run)
     ui.markdown("#### Export to PAMGuard\nThe final model is trained on all frames and saved as a zip that "
                 "PAMGuard's **Deep Learning Classifier** loads directly.")
     if not_ready(p, "model", "model"):
@@ -604,6 +605,62 @@ A click model only suits recordings at the sample rate it was trained on, becaus
                         ("Final model training history", p.folder / "model" / "history.csv")]:
         if Path(path).is_file():
             output_row(label, path, p.folder)
+
+
+async def dl_classify_new(p, saver, start_run):
+    """One detection type: classify new binaries with the trained model, in clock-aligned blocks."""
+    voc = saver.get("data.voc_type", "whistle")
+    what = "Whistle and Moan Detector" if voc == "whistle" else "Click Detector"
+    ui.markdown(f"#### Classify new data\nA folder of PAMGuard **{what}** binaries (the detection type this model "
+                "was trained on), optionally limited to a date range. Frames are made with the training settings, "
+                "the model predicts each frame, and each clock-aligned block gets the mean of its frames' "
+                "probabilities.")
+    if not_ready(p, "model", "model"):
+        return
+    path_row(saver, "new_data.binary_folder", "Folder of binary files", "dir")
+    with ui.row().classes("gap-4"):
+        field(saver, {"key": "new_data.start", "label": "From day (YYYY-MM-DD, optional)", "kind": "text"})
+        field(saver, {"key": "new_data.end", "label": "To day (inclusive, optional)", "kind": "text"})
+    with ui.row().classes("gap-4 items-start"):
+        field(saver, {"key": "new_data.block_minutes", "label": "Block length", "kind": "select", "default": 1,
+                      "options": {1: "1 min", 2: "2 min", 5: "5 min", 10: "10 min", 15: "15 min", 30: "30 min",
+                                  60: "1 hour"}})
+        field(saver, {"key": "new_data.min_frames", "label": "Min frames per block", "kind": "int", "min": 1,
+                      "default": 1})
+        field(saver, {"key": "new_data.min_score", "label": "Min block score (0-1)", "kind": "number",
+                      "step": 0.01, "min": 0, "max": 1, "default": 0.0,
+                      "help": "top probability x its lead over the second; below = uncertain"})
+
+    def go():
+        if not saver.get("new_data.binary_folder"):
+            ui.notify("Choose the folder of binary files first.", type="warning")
+            return
+        start_run(["apply"])
+    ui.button("Classify new data", icon="play_arrow", on_click=go)
+    st = p.stage_states()
+    bl = p.folder / "apply" / "blocks.csv"
+    if st.get("apply") in ("done", "outdated") and bl.is_file():
+        if st["apply"] == "outdated":
+            ui.label("Settings changed since: classify again to update.").classes("text-amber-700")
+        blocks = _csv(bl)
+        with ui.row().classes("gap-3"):
+            for k, v in blocks["decision"].value_counts().items():
+                metric(str(k), int(v), "{:d}", "blocks")
+        if len(blocks):
+            ui.markdown("#### Presence over time")
+            slot = ImageSlot("w-full max-w-4xl")
+            bm = float(saver.get("new_data.block_minutes", 1) or 1)
+            show = blocks.copy()
+            show.insert(0, "block", pd.to_datetime(show["block_start"], unit="s", utc=True).dt.strftime(
+                "%Y-%m-%d %H:%M"))
+            with ui.expansion("Blocks", icon="table_rows").classes("w-full"):
+                table(show.drop(columns=["block_start", "block_end"]).round(3), rows=15)
+            for label, path in [("Block decisions", bl),
+                                ("Frame predictions (standard format)", p.folder / "apply" / "frame_predictions.csv")]:
+                if path.is_file():
+                    output_row(label, path, p.folder)
+            await slot.fill(lambda: timeline_fig(blocks, "decision", bm))
+    ui.separator().classes("my-4")
 
 
 def _zip_info(path):

@@ -243,8 +243,7 @@ def project_page(path: str):
     saver = Saver(p, on_saved)
     steps = (["data", "labels"] if kind == "calltypes" else ["data"]) + ["settings", "run", "results", "apply"]
     names = {"data": "Data", "labels": "Labels", "settings": "Settings", "run": "Run", "results": "Results",
-             "apply": "Export to PAMGuard" if kind == "delphinid" and cfg["data"].get("source") != "multi"
-             else "Classify new data · export"}
+             "apply": "Classify new data · export"}
     titles = {s: f"{k} · {names[s]}" for k, s in enumerate(steps, 1)}
 
     with ui.row().classes("w-full no-wrap items-start p-2 gap-4"):

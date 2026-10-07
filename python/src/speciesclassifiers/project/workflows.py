@@ -1016,7 +1016,9 @@ def dl_defaults():
         "final": {"block_minutes": 10, "n_trees": 500, "node_size": 1},
         "decision": {"min_scores": {}},
         "new_data": {"source": "binaries", "binary_folder": "", "start": "", "end": "",
-                     "whistle_frames_csv": "", "click_frames_csv": ""},
+                     "whistle_frames_csv": "", "click_frames_csv": "",
+                     # one detection type: frame probabilities averaged per block
+                     "block_minutes": 1, "min_frames": 1, "min_score": 0.0},
         "model_name": "delphinID_whistles",
     }
 
@@ -1291,9 +1293,65 @@ def dl_new_frames(n, cfg, voc_type, acoustic, sample_rate):
     return click_frames(det, acoustic, sr) if voc_type == "click" else whistle_frames(det, acoustic)
 
 
+def dl_blocks(frames, probs, classes, block_minutes=1, min_frames=1, min_score=0.0):
+    """Frame probabilities -> clock-aligned blocks: mean probability per class over the block's frames, the top
+    class, its score (top x lead over the second) and the decision ("uncertain" below ``min_score`` or with
+    fewer than ``min_frames`` frames)."""
+    from speciesclassifiers.randomforest.model import decision_score
+    blk = 60 * float(block_minutes)
+    b = np.floor(frames["frame_start"].to_numpy(float) / blk) * blk
+    P = pd.DataFrame(np.asarray(probs, float), columns=classes)
+    P["block_start"] = b
+    g = P.groupby("block_start")
+    out = g[classes].mean()
+    out.insert(0, "n_frames", g.size())
+    out.insert(0, "block_end", out.index + blk)
+    out = out.reset_index()
+    M = out[classes].to_numpy()
+    out["predicted"] = np.array(classes)[M.argmax(1)]
+    out["score"] = decision_score(M)
+    ok = (out["score"] >= min_score) & (out["n_frames"] >= min_frames)
+    out["decision"] = np.where(ok, out["predicted"], "uncertain")
+    return out.rename(columns={c: f"p_{c}" for c in classes})
+
+
+def dl_apply_single(p, cfg):
+    """New data with one detection type: the PAMGuard model predicts each frame; blocks average them."""
+    from speciesclassifiers.delphinid import load_pamguard_zip
+    from speciesclassifiers.delphinid.crossval import feature_columns, to_standard_output
+    from speciesclassifiers.delphinid.export import cleanup
+    zips = sorted((p.folder / "model").glob("*.zip"))
+    if not zips:
+        raise RuntimeError("No trained model: run the model stage first.")
+    _, classes, acoustic, sr, _ = dl_training_data(p, cfg)
+    n = {**dl_defaults()["new_data"], **(cfg.get("new_data") or {})}
+    print(f"Making {acoustic.voc_type} frames of the new data...")
+    frames = dl_new_frames(n, cfg, acoustic.voc_type, acoustic, sr)
+    out = p.stage_dir("apply")
+    for f in out.glob("*.csv"):
+        f.unlink()
+    if not len(frames):
+        raise ValueError(f"No {acoustic.voc_type} frames in the new data (check the folder, dates and frame settings).")
+    fn, _ = load_pamguard_zip(zips[0])
+    try:
+        probs = fn(frames[feature_columns(frames)].to_numpy("float32"))
+    finally:
+        cleanup(fn)
+    pr = to_standard_output(frames, probs, classes, cfg.get("model_name", "delphinID"), acoustic.voc_type)
+    pr["start"] = pr["detection_id"].map(pd.Series(frames["frame_start"].to_numpy(float),
+                                                     index=dl_frame_ids(frames))).to_numpy()
+    pr.to_csv(out / "frame_predictions.csv", index=False)
+    blocks = dl_blocks(frames, probs, classes, n.get("block_minutes", 1), n.get("min_frames", 1), n.get("min_score", 0.0))
+    blocks.to_csv(out / "blocks.csv", index=False)
+    print(f"{len(frames)} frames -> {len(blocks)} blocks of {n.get('block_minutes', 1)} min: " +
+          ", ".join(f"{k} {v}" for k, v in blocks["decision"].value_counts().items()))
+
+
 def dl_apply(p, cfg):
     """New data: each type's PAMGuard model predicts its frames; the final forest decides each block."""
     require_tensorflow()
+    if not dl_multi(cfg):
+        return dl_apply_single(p, cfg)
     from speciesclassifiers.delphinid import AcousticParams, load_pamguard_zip
     from speciesclassifiers.delphinid.crossval import feature_columns, to_standard_output
     from speciesclassifiers.delphinid.export import cleanup
@@ -1345,7 +1403,7 @@ DELPHINID = Workflow(
      Stage("final", "Final layer: random forest per block (leave one event out)", dl_final, ["final"],
            after="crossval", optional=True, enabled=dl_multi),
      Stage("apply", "Classify new data", dl_apply, ["new_data", "decision", "final"], after="model", optional=True,
-           enabled=lambda cfg: dl_multi(cfg) and bool((cfg.get("new_data") or {}).get("binary_folder") or (
+           enabled=lambda cfg: bool((cfg.get("new_data") or {}).get("binary_folder") or (
                (cfg.get("new_data") or {}).get("source") == "frames")))],
     dl_defaults, dl_example)
 

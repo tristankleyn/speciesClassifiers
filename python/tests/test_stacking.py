@@ -122,3 +122,27 @@ def test_delphinid_diagnostics():
     assert s["frames_kept"] < len(t) and (k["confidence"] >= 0.7).all()
     assert s["frame_accuracy"] >= s_all["frame_accuracy"] and s["events_decided"] < 18
     assert s["frame_confusion"].to_numpy().sum() == s["frames_kept"]
+
+
+def test_delphinid_classify_new_single(tmp_path):
+    """One detection type: the trained zip classifies new frames in clock-aligned blocks."""
+    import pytest
+    from speciesclassifiers.project import WORKFLOWS, Project, checks, run
+    from speciesclassifiers.project.workflows import EXAMPLES, dl_blocks
+    P = np.array([[0.9, 0.1], [0.7, 0.3], [0.2, 0.8]])
+    f = pd.DataFrame({"frame_start": [0.0, 30.0, 70.0]})
+    b = dl_blocks(f, P, ["A", "B"], block_minutes=1, min_frames=2)
+    assert list(b["n_frames"]) == [2, 1] and np.isclose(b["p_A"][0], 0.8)
+    assert list(b["decision"]) == ["A", "uncertain"]
+    if not checks.tensorflow_status()["ok"]:
+        pytest.skip("TensorFlow not installed")
+    cfg = WORKFLOWS["delphinid"].example()
+    cfg["settings"].update({"training": {"epochs": 2}, "resampling": {"n_bootstraps": 1},
+                            "crossval": {"run": False, "n_folds": 2}})
+    cfg["new_data"] = {"source": "frames", "whistle_frames_csv": str(EXAMPLES / "frames_example_synthetic.csv"),
+                       "binary_folder": "", "block_minutes": 5}
+    p = Project.create(tmp_path / "dl1", "delphinid", config=cfg)
+    assert p.stage_states()["apply"] == "pending"
+    assert run(p.folder) == "finished"
+    b = pd.read_csv(p.folder / "apply" / "blocks.csv")
+    assert len(b) >= 18 and {"decision", "n_frames", "p_SpA"} <= set(b.columns)      # events may span blocks
