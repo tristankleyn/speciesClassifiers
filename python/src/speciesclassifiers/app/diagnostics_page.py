@@ -10,7 +10,7 @@ from nicegui import background_tasks, run, ui
 
 from speciesclassifiers.project import Project
 
-from .widgets import ImageSlot, Saver, new_fig, table
+from .widgets import ImageSlot, Saver, confusion_table, new_fig, table
 
 _CACHE = {}
 
@@ -45,7 +45,6 @@ def diagnostics_link(p, ty=""):
 @ui.page("/diagnostics")
 async def diagnostics_page(path: str, type: str = ""):  # noqa: A002 (query parameter name)
     from speciesclassifiers.delphinid.diagnostics import FRAME_MEASURES, apply_filters, summary
-    from speciesclassifiers.plots import plot_confusion
 
     from .main import header
     from .results import metric
@@ -91,6 +90,8 @@ async def diagnostics_page(path: str, type: str = ""):  # noqa: A002 (query para
                 step = 0.01 if hi - lo <= 2 else (1.0 if hi - lo <= 200 else 50.0)
                 lo, hi = float(np.floor(lo / step) * step), float(np.ceil(hi / step) * step)
                 lo, hi = round(lo, 6), round(hi, 6)
+                if col == "density":          # decimal 0-2; the top end means "2 or more"
+                    lo, hi, step = 0.0, 2.0, 0.01
                 cur = state["frame"].get(col) or [lo, hi]
                 cur = [lo if cur[0] is None else cur[0], hi if cur[1] is None else cur[1]]
                 lab = ui.label().classes("text-sm mt-2")
@@ -98,7 +99,7 @@ async def diagnostics_page(path: str, type: str = ""):  # noqa: A002 (query para
                 def text(c=col, la=label, u=unit, lb=lab):
                     a, b = state["frame"].get(c) or [None, None]
                     rng = "all" if a is None and b is None else \
-                        f"{'' if a is None else f'{a:g}'} to {'' if b is None else f'{b:g}'}"
+                        f"{'min' if a is None else f'{a:g}'} to {'max' if b is None else f'{b:g}'}"
                     lb.text = f"{la}{f' ({u})' if u else ''}: {rng}"
                 r = ui.range(min=lo, max=hi, step=step, value={"min": cur[0], "max": cur[1]}).props(
                     "label").classes("w-full mt-6")
@@ -137,12 +138,6 @@ async def diagnostics_page(path: str, type: str = ""):  # noqa: A002 (query para
 
     busy = {"n": 0}
 
-    def draw_conf(conf, title):
-        n = max(len(conf.index), len(conf.columns), 2)
-        fig, ax = new_fig(1.4 + 0.8 * n, 1.2 + 0.7 * n)
-        plot_confusion(conf, title, ax=ax)
-        return fig
-
     def draw_hist(col, rng):
         fig, ax = new_fig(5.6, 3.2)
         v = t[col].astype(float)
@@ -179,15 +174,9 @@ async def diagnostics_page(path: str, type: str = ""):  # noqa: A002 (query para
                        hint=f"{s['events_decided']} of {s['events_total']}")
                 metric("Event accuracy", s["event_accuracy"], hint="of decided events")
                 metric("Event balanced", s["event_balanced"])
-            per = pd.DataFrame({"class": classes, "frames: share correct": [s["frame_by_class"][c] for c in classes],
-                                "events: share correct": [s["event_by_class"][c] for c in classes],
-                                "frames kept": [int((kept["true_class"] == c).sum()) for c in classes],
-                                "events decided": [int(((ev["true_class"] == c) & ev["decided"]).sum())
-                                                   for c in classes]})
-            with ui.row().classes("gap-4 items-start w-full"):
-                s1, s2 = ImageSlot("w-[22rem]"), ImageSlot("w-[22rem]")
-                with ui.column():
-                    table(per.round(3), rows=12)
+            with ui.row().classes("gap-6 items-start w-full"):
+                confusion_table(s["frame_confusion"], "Kept frames (rows: true)")
+                confusion_table(s["event_confusion"], "Decided events (rows: true)")
             with ui.row().classes("items-center gap-3"):
                 ui.label("Distribution of").classes("text-sm")
                 sel = ui.select({c: v[0] for c, v in measures.items()}, value=hist_col["c"]).classes("w-72")
@@ -202,8 +191,6 @@ async def diagnostics_page(path: str, type: str = ""):  # noqa: A002 (query para
                     "n_frames_all", "kept_share"]
             with ui.expansion("Events", icon="table_rows").classes("w-full"):
                 table(evs[cols].sort_values(["decided", "correct", "score"]).round(3), rows=15)
-        await s1.fill(lambda: draw_conf(s["frame_confusion"], "Kept frames (rows: true)"))
-        await s2.fill(lambda: draw_conf(s["event_confusion"], "Decided events (rows: true)"))
         await redraw_hist()
 
     hist_col = {"c": "confidence" if "confidence" in measures else next(iter(measures))}

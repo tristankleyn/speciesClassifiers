@@ -93,7 +93,7 @@ def new_fig(w, h):
 def fig_src(fig):
     """Matplotlib figure -> data URL for ui.image."""
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+    fig.savefig(buf, format="png", dpi=170, bbox_inches="tight")
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
@@ -140,6 +140,43 @@ def table(df, rows=10, title=None):
             df[c] = df[c].round(3)
     df = df.astype(object).where(df.notna(), "")
     return ui.table.from_pandas(df, title=title, pagination=rows).props("dense flat bordered").classes("w-full")
+
+
+def confusion_frame(conf):
+    """Confusion counts (rows true, columns predicted) -> table: true class, one column of predictions per
+    class, total predicted (kept), recall (correct / that class's total) and precision (correct / predictions
+    of that class)."""
+    import pandas as pd
+    conf = conf if conf is not None else pd.DataFrame()
+    labels = sorted(set(map(str, conf.index)) | set(map(str, conf.columns)))
+    cm = conf.copy()
+    cm.index, cm.columns = cm.index.map(str), cm.columns.map(str)
+    cm = cm.reindex(index=labels, columns=labels, fill_value=0).fillna(0).astype(int)
+    diag = pd.Series({c: cm.at[c, c] for c in labels})
+    rows, cols = cm.sum(axis=1), cm.sum(axis=0)
+    out = cm.copy()
+    out.columns = [f"→ {c}" for c in labels]
+    out.insert(0, "true", labels)
+    out["total"] = rows.to_numpy()
+    out["recall"] = [f"{d / r:.0%}" if r else "–" for d, r in zip(diag, rows)]
+    out["precision"] = [f"{d / c:.0%}" if c else "–" for d, c in zip(diag, cols)]
+    total = {"true": "all", **{f"→ {c}": int(cols[c]) for c in labels}, "total": int(rows.sum()),
+             "recall": f"{diag.sum() / rows.sum():.0%}" if rows.sum() else "–", "precision": ""}
+    return pd.concat([out.reset_index(drop=True), pd.DataFrame([total])], ignore_index=True)
+
+
+def confusion_table(conf, title=None):
+    """A confusion matrix as a table (see ``confusion_frame``): rows are the true classes, '→ X' columns the
+    predictions; the last row totals the predictions (its recall is the overall accuracy)."""
+    df = confusion_frame(conf)
+    with ui.column().classes("gap-1"):
+        if title:
+            ui.label(title).classes("text-sm font-medium")
+        t = ui.table.from_pandas(df.astype(object), pagination=0).props("dense flat bordered hide-bottom")
+        t.add_slot("body-cell", r"""
+            <q-td :props="props" :class="(props.col.name === '→ ' + props.row.true) ? 'bg-blue-100 font-bold' :
+                  (props.row.true === 'all' ? 'text-gray-600' : '')">{{ props.value }}</q-td>""")
+    return t
 
 
 def open_folder(path):

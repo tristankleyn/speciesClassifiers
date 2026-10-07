@@ -10,7 +10,7 @@ from speciesclassifiers.project.workflows import read_json
 
 from nicegui import run
 
-from .widgets import ImageSlot, field, new_fig, open_folder, path_row, table
+from .widgets import ImageSlot, confusion_table, field, new_fig, open_folder, path_row, table
 
 _CACHE = {}
 
@@ -65,7 +65,7 @@ def output_row(label, path, root=None):
 
 # ============================================================================ random forest ==========
 async def rf_results(p, saver):
-    from speciesclassifiers.plots import plot_confusion, plot_importance
+    from speciesclassifiers.plots import plot_importance
     from speciesclassifiers.randomforest import summarise
     if saver.get("data.type") == "binaries":
         from .stacked import stacked_results
@@ -93,11 +93,6 @@ async def rf_results(p, saver):
     with box:
         ui.spinner(size="lg")
     latest = {"n": 0}
-
-    def draw_conf(conf):
-        fig, ax = new_fig(4.6, 4)
-        plot_confusion(conf, "Groups (rows: true, columns: predicted)", ax=ax)
-        return fig
 
     def draw_curve(c, mg):
         fig, ax = new_fig(5, 3.4)
@@ -127,15 +122,14 @@ async def rf_results(p, saver):
                 metric("Groups decided", 1 - s["groups_discarded"])
                 metric("Groups", len(s["groups"]), "{:d}")
             with ui.row().classes("gap-4 items-start w-full"):
-                conf_slot = ImageSlot("w-[26rem]") if len(s["confusion"]) else None
+                if len(s["confusion"]):
+                    confusion_table(s["confusion"], "Groups decided (rows: true)")
                 curve_slot = ImageSlot("w-[28rem]")
             g = s["groups"].assign(correct=lambda x: x["predicted"] == x["true_class"])
             g["decision"] = np.where(g["score"] >= mg, g["predicted"], "uncertain")
             with ui.expansion("Groups", icon="table_rows").classes("w-full"):
                 table(g[["event_id", "true_class", "decision", "predicted", "score", "n", "n_total", "correct"]]
                       .sort_values(["correct", "score"]), rows=15)
-        if conf_slot:
-            await conf_slot.fill(lambda: draw_conf(s["confusion"]))
         await curve_slot.fill(lambda: draw_curve(c, mg))
     s1.on("change", show)
     s2.on("change", show)
@@ -196,8 +190,6 @@ async def rf_apply(p, saver, start_run):
 
 # ============================================================================ call types ============
 async def ct_results(p, saver):
-    from speciesclassifiers.plots import plot_confusion
-    conf_slot = None
     if not_ready(p, "windows", "windows"):
         return
     ws = read_json(p.folder / "windows" / "summary.json", {})
@@ -224,24 +216,15 @@ async def ct_results(p, saver):
             metric("Windows", ev.get("n_windows"), "{:d}")
         conf = _csv(p.folder / "evaluate" / "confusion.csv", index_col=0)
         if conf is not None:
-            conf_slot = ImageSlot("w-[26rem]")
-
-            def draw_conf():
-                fig, ax = new_fig(4.8, 4.2)
-                plot_confusion(conf, "Call types (rows: true)", ax=ax)
-                return fig
+            confusion_table(conf, "Call types (rows: true)")
 
     layered = list((p.folder / "discover").glob("heldout_*.json"))
     if not layered:
         ui.markdown("#### Discovered clusters\nWindows grouped by shape. A cluster's verdict for a label task is "
                     "given only when it is reliably one label, on enough days.")
     if not_ready(p, "discover", "clusters"):
-        if conf_slot:
-            await conf_slot.fill(draw_conf)
         return
     if layered:
-        if conf_slot:
-            await conf_slot.fill(draw_conf)
         await layers_results(p, saver)
         ui.markdown("#### Decisions\nNew data is decided per clock-aligned block. Optional **rules** then override "
                     "a block's decision, e.g. mark blocks whose contours barely vary in frequency as noise. Changes "
@@ -278,8 +261,6 @@ async def ct_results(p, saver):
                 "verdict. Optional **rules** then override a block's decision, e.g. mark blocks whose contours "
                 "barely vary in frequency as noise. Changes apply after the next Run (library + new data).")
     decision_editor(saver)
-    if conf_slot:
-        await conf_slot.fill(draw_conf)
 
 
 BLOCK_VALUES = {"block_meanfreq_range_hz": "range of contour mean frequencies (Hz)",
@@ -466,7 +447,6 @@ def _event_curve(ev, classes):
 
 
 async def dl_results(p, saver):
-    from speciesclassifiers.plots import plot_confusion
 
     from .diagnostics_page import diagnostics_link
     if p.stage_states().get("crossval") in ("done", "outdated"):
@@ -501,8 +481,10 @@ async def dl_results(p, saver):
             metric("Event accuracy", s["event_accuracy"])
             metric("Events", len(ev), "{:d}")
             metric("Classes", len(classes), "{:d}")
-        with ui.row().classes("gap-4 items-start w-full"):
-            slots = [ImageSlot("w-[24rem]"), ImageSlot("w-[24rem]"), ImageSlot("w-[26rem]")]
+        with ui.row().classes("gap-6 items-start w-full"):
+            confusion_table(s["frame_confusion"], "Frames (rows: true)")
+            confusion_table(s["event_confusion"], "Events (rows: true)")
+            slots = [ImageSlot("w-[26rem]")]
         acc = s["event_accuracy_by_class"].rename("event accuracy").reset_index()
         with ui.expansion("Events", icon="table_rows").classes("w-full"):
             e = ev.assign(score=score)[["event_id", "true_class", "predicted", "correct", "score", "n_frames"]]
@@ -515,11 +497,6 @@ async def dl_results(p, saver):
                 ui.label("Validation loss well above training loss, or rising, suggests overfitting: try more "
                          "dropout, fewer epochs or fewer dense units.").classes("text-xs text-gray-500")
                 hist_slot = ImageSlot("w-full max-w-4xl")
-
-        def conf(c, title):
-            fig, ax = new_fig(4.2, 3.8)
-            plot_confusion(c, title, ax=ax)
-            return fig
 
         def draw_curve():
             fig, ax = new_fig(4.8, 3.4)
@@ -544,9 +521,7 @@ async def dl_results(p, saver):
             return fig
         ui.label("Event score: top probability × its lead over the second. In PAMGuard, events can be judged "
                  "the same way from the model's frame predictions.").classes("text-xs text-gray-500")
-        await slots[0].fill(lambda: conf(s["frame_confusion"], "Frames"))
-        await slots[1].fill(lambda: conf(s["event_confusion"], "Events"))
-        await slots[2].fill(draw_curve)
+        await slots[0].fill(draw_curve)
         if hist_slot:
             await hist_slot.fill(draw_hist)
     fc = _csv(p.folder / "frames" / "class_counts.csv")
@@ -756,13 +731,6 @@ async def layer_section(p, saver, name, block_minutes, variants=None, title=None
             ax.legend(fontsize=7)
             return fig
 
-        def draw_conf(conf, title):
-            from speciesclassifiers.plots import plot_confusion
-            n = max(len(conf.index), len(conf.columns))
-            fig, ax = new_fig(1.2 + 0.75 * n, 1.0 + 0.65 * n)
-            plot_confusion(conf, title, ax=ax)
-            return fig
-
         async def show():
             t = float(sl.value)
             ms = dict(saver.get("decision.min_scores") or {})
@@ -779,18 +747,14 @@ async def layer_section(p, saver, name, block_minutes, variants=None, title=None
                     metric("Balanced (blocks)", bp["balanced_accuracy"])
                     metric(f"{unit.capitalize()}s decided", up["coverage"])
                     metric(f"{unit.capitalize()} accuracy", up["accuracy"], hint=f"of {unit}s decided")
-                rec = pd.DataFrame({"class": list(bp["recall"]),
-                                    "blocks: share correct": [bp["recall"][c] for c in bp["recall"]],
-                                    f"{unit}s: share correct": [up["recall"].get(c) for c in bp["recall"]]})
-                ui.label("Accuracy, confusion matrix and share correct count decided blocks only; blocks below "
-                         "the minimum score are left out (see 'Blocks decided').").classes("text-xs text-gray-500")
-                with ui.row().classes("gap-4 items-start w-full"):
-                    s1, s2 = ImageSlot("w-[24rem]"), ImageSlot("w-[22rem]")
-                    with ui.column().classes("min-w-64"):
-                        table(rec, rows=12)
-            what = variants.get(v, "") + ": " if len(variants) > 1 else ""
+                ui.label("Accuracy and the tables count decided blocks only; blocks below the minimum score are "
+                         "left out (see 'Blocks decided').").classes("text-xs text-gray-500")
+                what = variants.get(v, "") + ": " if len(variants) > 1 else ""
+                with ui.row().classes("gap-6 items-start w-full"):
+                    confusion_table(bp["confusion"], f"{what}blocks decided (rows: true)")
+                    confusion_table(up["confusion"], f"{what}{unit}s decided (rows: true)")
+                    s1 = ImageSlot("w-[24rem]")
             await s1.fill(lambda: draw_curve(bc, t, f"{what}blocks, threshold curve"))
-            await s2.fill(lambda: draw_conf(bp["confusion"], f"{what}blocks (rows: true)"))
         sl.on("change", show)
         await show()
         if given:
