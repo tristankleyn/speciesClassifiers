@@ -557,22 +557,71 @@ def detector_windows(det, raw, lib):
                            lib["agg_params"]), contours
 
 
-def merged_blocks(feats, events, libs, weights=None, period=None):
-    """Blocks for one pathway layer (and those under it), merging the detection types. Same columns as
-    ``detectors.merged_blocks`` in the package."""
+def _unb64(d):
+    return np.frombuffer(base64.b64decode(d["b64"]), dtype=d["dtype"]).reshape(d["shape"])
+
+
+def forest_proba(fd, X):
+    """Class probabilities from a stored final-layer forest (as ``forest.forest_proba`` in the package)."""
+    X = np.asarray(X, dtype=np.float32).astype(np.float64)
+    out = np.zeros((len(X), len(fd["classes"])))
+    if "_arrays" not in fd:
+        fd["_arrays"] = [tuple(_unb64(t[k]) for k in ("left", "right", "feature", "threshold", "value"))
+                         for t in fd["trees"]]
+    for left, right, feat, thr, val in fd["_arrays"]:
+        node = np.zeros(len(X), dtype=np.int64)
+        active = left[node] != -1
+        while active.any():
+            i = np.where(active)[0]
+            n = node[i]
+            node[i] = np.where(X[i, feat[n]] <= thr[n], left[n], right[n])
+            active = left[node] != -1
+        out += val[node]
+    return out / max(len(fd["_arrays"]), 1)
+
+
+def _forest_row(fd, wins_by_det, use):
+    """Cluster shares of one block's windows (types in ``use``) -> forest probabilities, or None."""
+    x = dict.fromkeys(fd["features"], 0.0)
+    any_w = False
+    for d in use:
+        ws = wins_by_det.get(d) or []
+        if not ws:
+            continue
+        any_w = True
+        n = {}
+        for w in ws:
+            k = f"{d}_c{w['cluster']}" if w["cluster"] >= 0 else f"{d}_unassigned"
+            n[k] = n.get(k, 0) + 1
+        for k, c in n.items():
+            if k in x:
+                x[k] = c / len(ws)
+    if not any_w:
+        return None
+    p = forest_proba(fd, np.array([[x[f] for f in fd["features"]]]))[0]
+    return dict(zip(fd["classes"], p))
+
+
+def merged_blocks(feats, events, libs, weights=None, period=None, forest=None):
+    """Blocks for one pathway layer (and those under it), merging the detection types (or deciding with the
+    final-layer ``forest``). Same columns as ``detectors.merged_blocks`` in the package."""
     libs = {d: lb for d, lb in libs.items() if lb is not None and d in feats}
     first = next(iter(libs.values()))
     layer = first["layer"]["name"]
     blk = int(round(first["block_minutes"] * 60 * NS))
     task = first["tasks"][0]
-    per, bases, classes = {}, {}, []
+    per, bases, classes, wb = {}, {}, [], {}
     for d, lb in libs.items():
-        _, bl = pathway_blocks(feats[d], events[d], {**lb, "children": {}}, period)
+        wins, bl = pathway_blocks(feats[d], events[d], {**lb, "children": {}}, period)
         per[d] = {int(round(b["block_start"] * NS)): b for b in bl}
+        for w in wins:
+            wb.setdefault((int(np.round(w["w_start"] * 1e9)) // blk) * blk, {}).setdefault(d, []).append(w)
         cl = lb["tasks"][0]["classes"]
         classes += [c for c in cl if c not in classes]
         bases[d] = lb.get("class_base") or {c: 1.0 / len(cl) for c in cl}
     keys = sorted(set().union(*[set(v) for v in per.values()]))
+    if forest is not None:
+        classes = list(forest["classes"])
     out = []
     for k in keys:
         r = {"block_start": k / NS, "block_end": (k + blk) / NS}
@@ -590,11 +639,17 @@ def merged_blocks(feats, events, libs, weights=None, period=None):
             else:
                 rows[d] = {c: np.nan if b.get(f"{layer}_p_{c}") is None else b[f"{layer}_p_{c}"]
                            for c in lb["tasks"][0]["classes"]}
-        m = merge_evidence(rows, bases, weights)
+        if forest is not None:
+            use = [d for d in libs if per[d].get(k) is not None and not per[d][k].get("rule")]
+            m = _forest_row(forest, wb.get(k, {}), use)
+            ms = forest.get("min_score", 0.0)
+        else:
+            m = merge_evidence(rows, bases, weights)
+            ms = task.get("min_score", 0.0)
         if m is None:
             dec, score = (rule_then, None) if rule_then is not None else ("no_detections", None)
         else:
-            dec, score = _decide(np.array([m[c] for c in classes]), classes, task.get("min_score", 0.0))
+            dec, score = _decide(np.array([m[c] for c in classes]), classes, ms)
         for c in classes:
             r[f"{layer}_p_{c}"] = None if m is None else float(m[c])
         r[f"{layer}_score"] = score
@@ -610,7 +665,8 @@ def merged_blocks(feats, events, libs, weights=None, period=None):
         if not sel or all(v is None for v in child.values()):
             continue
         sub = {d: [f for f in fs if (int(np.round(f["w_start"] * 1e9)) // blk) * blk in sel] for d, fs in feats.items()}
-        by = {int(round(c["block_start"] * NS)): c for c in merged_blocks(sub, events, child, weights)}
+        fc = (forest.get("children") or {}).get(g) if forest is not None else None
+        by = {int(round(c["block_start"] * NS)): c for c in merged_blocks(sub, events, child, weights, forest=fc)}
         for r in out:
             c = by.get(int(round(r["block_start"] * NS)))
             if r[layer] != g or c is None:
@@ -640,7 +696,7 @@ def classify_multi(raw, lib, period=None):
     if not libs:
         raise ValueError("No detections of the library's detection types: " + ", ".join(lib["detectors"]))
     wins = {d: classify_windows(feats[d], libs[d]) for d in libs}
-    return wins, merged_blocks(feats, events, libs, lib.get("weights"), period)
+    return wins, merged_blocks(feats, events, libs, lib.get("weights"), period, forest=lib.get("forest"))
 
 
 def read_clicks_csv(path):

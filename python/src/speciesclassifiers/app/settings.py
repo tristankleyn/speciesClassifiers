@@ -71,9 +71,22 @@ CALLTYPES = [
         {"key": "settings.click_spectrum.profile_bands", "label": "Spectrum profile bands", "kind": "int", "min": 0,
          "advanced": True},
     ]),
+    ("Final decision", [
+        {"key": "decision.method", "label": "How each block is decided", "kind": "select",
+         "options": {"multiply": "Multiply evidence", "forest": "Random forest"},
+         "help": "multiply each type's cluster probabilities, or a balanced random forest on the share of a "
+                 "block's windows in each cluster (tested strictly: clusters redone without each held-out event; "
+                 "slower)"},
+        {"key": "decision.forest.n_trees", "label": "Trees", "kind": "int", "min": 10, "step": 100,
+         "when": ("decision.method", "forest")},
+        {"key": "decision.forest.min_samples_leaf", "label": "Min blocks per leaf", "kind": "int", "min": 1,
+         "when": ("decision.method", "forest"), "advanced": True},
+        {"key": "decision.forest.n_jobs", "label": "Held-out events tested at once", "kind": "int",
+         "when": ("decision.method", "forest"), "advanced": True, "help": "-1 = one per CPU core"},
+    ]),
     ("Combining whistles and clicks", [
         {"key": "decision.weights.whistle", "label": "Weight of whistles", "kind": "number", "step": 0.25, "min": 0,
-         "also": USE_WHISTLES, "help": "1 = full say; 0 = ignored when clicks are there too"},
+         "also": USE_WHISTLES, "help": "1 = full say; 0 = ignored when clicks are there too (multiplying only)"},
         {"key": "decision.weights.click", "label": "Weight of clicks", "kind": "number", "step": 0.25, "min": 0,
          "also": USE_WHISTLES},
     ]),
@@ -184,7 +197,7 @@ for _title, _specs in CALLTYPES:      # whistle settings only with whistles, cli
 
 SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID}
 # values of keys that older projects may not have yet
-CONDITION_DEFAULTS = {"data.use_whistles": True, "data.use_clicks": False}
+CONDITION_DEFAULTS = {"data.use_whistles": True, "data.use_clicks": False, "decision.method": "multiply"}
 
 
 def applies(spec, cfg):

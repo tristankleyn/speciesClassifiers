@@ -197,7 +197,8 @@ def ct_defaults():
             "reliability": {"prior_strength": 10, "ci": 0.9, "min_label_days": 2, "unit": "event_id",
                             "balanced": True},
         },
-        "decision": {"block_minutes": 10, "rules": [], "min_scores": {}, "weights": {"whistle": 1.0, "click": 1.0}},
+        "decision": {"block_minutes": 10, "rules": [], "min_scores": {}, "weights": {"whistle": 1.0, "click": 1.0},
+                     "method": "multiply", "forest": {"n_trees": 500, "min_samples_leaf": 1, "n_jobs": -1}},
         "new_data": {"source": "binaries", "path": "", "start": "", "end": "", "click_source": "binaries",
                      "click_path": ""},
     }
@@ -278,8 +279,13 @@ def ct_detectors(cfg):
 
 
 def ct_multi(cfg):
-    """Clicks in use: each detection type is clustered on its own and merged per block."""
-    return "click" in ct_detectors(cfg)
+    """Clicks in use, or the forest final layer: each detection type is clustered on its own and combined
+    per block (multiplied evidence, or the forest)."""
+    return "click" in ct_detectors(cfg) or ct_uses_forest(cfg)
+
+
+def ct_uses_forest(cfg):
+    return (cfg.get("decision") or {}).get("method") == "forest"
 
 
 def ct_features(cfg, det):
@@ -527,6 +533,70 @@ def ct_discover_multi(p, cfg, days, tree, rp):
     print(lt.to_string(index=False))
 
 
+def ct_forest(p, cfg):
+    """Final layer: a balanced random forest per layer on the blocks' cluster shares, tested strictly
+    (each held-out event reclustered without it)."""
+    from speciesclassifiers.calltypes import DiscoverParams, LabelTask, ReliabilityParams, discovery_pool
+    from speciesclassifiers.calltypes import multiclass as mc
+    from speciesclassifiers.calltypes.forest import ForestParams, final_forest, strict_layer_loo
+    from speciesclassifiers.calltypes.pathway import node_label_col, node_labels
+    out = p.stage_dir("forest")
+    for old in [*out.glob("heldout_*"), *out.glob("importance_*"), out / "forest.pkl", out / "layers.csv"]:
+        old.unlink(missing_ok=True)
+    tree = cfg["labels"].get("pathway")
+    if not tree:
+        raise ValueError("The forest final layer needs a classification: set up its layers on the Labels step.")
+    bm = cfg["decision"]["block_minutes"]
+    rp = ReliabilityParams(**{**cfg["settings"]["reliability"], "block_minutes": bm})
+    unit = mc.unit_col(rp)
+    fp = ForestParams(**{**ForestParams().to_dict(), **(cfg["decision"].get("forest") or {})})
+    days = read_json(p.folder / "windows" / "summary.json")["annotated_days"]
+    dets = ct_detectors(cfg)
+    pools = {d: discovery_pool(load_pickle(_windows_file(p, d)), days,
+                               include_unannotated_days=cfg["labels"].get("include_unannotated_days", True))
+             for d in dets}
+    prs = {d: load_pickle(p.folder / "discover" / f"pathway_{d}.pkl") for d in dets}
+    dps = {d: DiscoverParams(**cfg["settings"]["discover"], features=ct_features(cfg, d)) for d in dets}
+    rows = []
+
+    def layer(node, pools, prs, path):
+        name, col = node["name"], node_label_col(node)
+        pools = {d: x.assign(**{col: node_labels(x, node)}) for d, x in pools.items()}
+        classes = list(dict.fromkeys(c for d in prs for c in prs[d]["result"]["multiclass"][name]["classes"]))
+        task = LabelTask(name, col, classes=classes)
+        print(f"Layer '{name}'" + (f" (within {' > '.join(path)})" if path else "") + f": classes {', '.join(classes)}")
+        held = strict_layer_loo({d: pools[d] for d in prs}, task, classes, {d: dps[d] for d in prs}, rp, bm, fp)
+        if len(held):
+            held.to_csv(out / f"heldout_{name}.csv", index=False)
+            _write_json({"classes": classes, "unit": unit, "base": {c: 1 / len(classes) for c in classes},
+                         "path": list(path), "column": node["column"], "forest": True, "types": list(prs)},
+                        out / f"heldout_{name}.json")
+            row = {"layer": name, "within": " > ".join(path) or "(all)", "classes": ", ".join(classes),
+                   "blocks": len(held)}
+            for lvl in ("block", "unit"):
+                perf = mc.performance(mc.aggregate(held, classes, lvl, bm), classes, 0.0)
+                row[f"{lvl}_accuracy"], row[f"{lvl}_balanced_accuracy"] = perf["accuracy"], perf["balanced_accuracy"]
+            rows.append(row)
+        fd, imp = final_forest({d: pools[d] for d in prs}, {d: prs[d]["result"] for d in prs}, task, classes, unit,
+                               bm, fp)
+        imp.rename("importance").to_csv(out / f"importance_{name}.csv", index_label="feature")
+        fd["layer"] = name
+        fd["children"] = {}
+        for g, child in (node.get("children") or {}).items():
+            sub_prs = {d: pr["children"][g] for d, pr in prs.items() if g in pr["children"]}
+            if not sub_prs:
+                continue
+            sub = {d: pools[d][pools[d][col].to_numpy() == g].reset_index(drop=True) for d in sub_prs}
+            fd["children"][g] = layer(child, sub, sub_prs, path + (g,))
+        return fd
+
+    forest = layer(tree, pools, prs, ())
+    _save_pickle(forest, out / "forest.pkl")
+    lt = pd.DataFrame(rows)
+    lt.to_csv(out / "layers.csv", index=False)
+    print(lt.to_string(index=False))
+
+
 def ct_discover_pathway(p, pool, tree, dp, rp):
     from speciesclassifiers.calltypes.pathway import check_pathway, discover_pathway, iter_results, layer_summaries
     problems = check_pathway(tree)
@@ -615,6 +685,16 @@ def ct_library_multi(p, cfg):
         libs["click"]["spectrum_params"] = ct_click_spectrum(cfg)
     lib = build_multi_library(libs, cfg["decision"].get("weights"), cfg["decision"]["block_minutes"],
                               cfg.get("name", "calltypes"))
+    if ct_uses_forest(cfg):
+        forest = load_pickle(p.folder / "forest" / "forest.pkl")
+        ms = cfg["decision"].get("min_scores") or {}
+
+        def set_ms(fd):
+            fd["min_score"] = float(ms.get(fd["layer"], 0.0))
+            for c in fd["children"].values():
+                set_ms(c)
+        set_ms(forest)
+        lib["forest"] = forest
     out = p.stage_dir("library")
     save_library(lib, out / "library.json")
     shutil.copy(standalone.__file__, out / "standalone.py")
@@ -694,6 +774,9 @@ CALLTYPES = Workflow(
            ["labels.tasks", "labels.pathway", "labels.include_unannotated_days", "settings.discover",
             "settings.reliability", "settings.features", "decision.block_minutes", "decision.weights"],
            after="windows"),
+     Stage("forest", "Final layer: random forest (strict test)", ct_forest,
+           ["decision.method", "decision.forest", "decision.block_minutes"], optional=True,
+           enabled=ct_uses_forest),
      Stage("library", "Build library", ct_library, ["decision", "labels.requires"]),
      Stage("apply", "Classify new data", ct_apply, ["new_data"], optional=True,
            enabled=lambda cfg: bool(cfg.get("new_data", {}).get("path") or cfg.get("new_data", {}).get("click_path")))],

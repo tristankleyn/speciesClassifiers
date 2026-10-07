@@ -43,6 +43,14 @@ lib = build_multi_library({"whistle": whistle_lib, "click": click_lib}, weights=
 windows, blocks = classify_multi({"whistle": whistles, "click": clicks}, lib)
 ```
 
+### Random forest final layer (`forest.py`; `decision.method = "forest"`)
+Instead of multiplying evidence, each layer can decide its blocks with a balanced random forest (every tree sees the same number of blocks of each class). A block's inputs are the share of its windows in each cluster (and unassigned), per detection type, side by side; types missing from a block are 0. Works with whistles alone too.
+
+- **Strict test**: for every held-out event, each detection type is clustered again without it (feature weights, clusters, outlier thresholds), all windows are assigned to those clusters as new data would be, the forest is trained on the other events' blocks and predicts the held-out event's blocks. Nothing about the held-out event is used. This means one clustering run per event and type, run in parallel (`decision.forest.n_jobs`); expect minutes to tens of minutes.
+- **Final forest**: trained on all labelled blocks with the full clustering; stored in the library (`forest`, one per layer with `children`) as plain arrays, so `standalone.py` applies it with numpy only and gives the same decisions.
+- Outputs (`forest/`): `heldout_<layer>.csv` (held-out block predictions), `importance_<layer>.csv` (which cluster shares matter), `layers.csv`. Rules still apply: a type whose block matches a rule is left out of that block.
+- Settings: `n_trees` (500), `min_samples_leaf` (1), `n_jobs` (-1 = one per core). The block score and minimum-score thresholds work as before.
+
 Blocks have, per layer, the merged decision, score and probabilities, plus each type's own decision (`<layer>_whistle`, `<layer>_click`) and window counts.
 
 The yes/no tasks with majority-vote blocks (as in the killer whale example) remain available.

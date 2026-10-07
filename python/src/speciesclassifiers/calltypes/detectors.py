@@ -60,11 +60,13 @@ def _key(t, blk):
     return (np.round(np.asarray(t, float) * 1e9).astype(np.int64) // blk) * blk
 
 
-def merged_blocks(windows, events, libs, weights=None, period=None):
+def merged_blocks(windows, events, libs, weights=None, period=None, forest=None):
     """Decision blocks for one pathway layer (and the layers under it), merging detection types.
 
     windows, events  {detector: windows / events (contours or clicks)}
     libs             {detector: pathway library node of this layer} (a detector without the layer: None)
+    forest           optional final-layer forest of this layer (``forest.forest_to_dict``, with ``children``):
+                     decides from the blocks' cluster shares instead of multiplying evidence
     Columns: block_start, block_end, ``n_windows_<det>``, per layer ``<layer>`` (merged decision),
     ``<layer>_score``, ``<layer>_p_<class>``, ``<layer>_<det>`` (each type's own decision), then ``rule``,
     ``path`` and ``decision`` (deepest confident decision).
@@ -75,10 +77,11 @@ def merged_blocks(windows, events, libs, weights=None, period=None):
     blk = int(round(blk_min * 60 * 1e9))
     task = first["tasks"][0]
     min_score = task.get("min_score", 0.0)
-    per, bases, classes = {}, {}, []
+    per, bases, classes, cw = {}, {}, [], {}
     for d, lib in libs.items():
         w = windows[d]
         w = classify_windows(w, lib) if len(w) else w.assign(cluster=pd.Series(dtype=int))
+        cw[d] = w
         b = block_votes(w, events[d], lib, period)
         b.index = _key(b["block_start"], blk)
         per[d] = b
@@ -101,7 +104,10 @@ def merged_blocks(windows, events, libs, weights=None, period=None):
         rule_txt[first_rule] = (f"{d}: " + b.loc[first_rule, "rule"].astype(str)).to_numpy()
         probs[d] = P
         out[f"{layer}_{d}"] = b[layer].fillna("no_detections").to_numpy()
-    M = merge_evidence(probs, bases, weights).reindex(columns=classes)
+    if forest is not None:
+        M, classes, min_score = _forest_probs(forest, cw, per, keys, blk_min)
+    else:
+        M = merge_evidence(probs, bases, weights).reindex(columns=classes)
     dec, score = decide(M.to_numpy(float), classes, min_score)
     dec = np.asarray(dec, dtype=object)
     none = dec == "no_data"
@@ -125,7 +131,8 @@ def merged_blocks(windows, events, libs, weights=None, period=None):
         child = {d: (lib.get("children") or {}).get(g) for d, lib in libs.items()}
         if not any(v is not None for v in child.values()):
             continue
-        cb = merged_blocks(sub_w, events, child, weights)
+        cb = merged_blocks(sub_w, events, child, weights,
+                           forest=(forest.get("children") or {}).get(g) if forest is not None else None)
         cb.index = _key(cb["block_start"], blk)
         idx = np.where(dec == g)[0]
         k = np.array(keys)[idx]
@@ -146,6 +153,27 @@ def merged_blocks(windows, events, libs, weights=None, period=None):
     return out.reset_index(drop=True)
 
 
+def _forest_probs(forest, classified, per, keys, block_minutes):
+    """Forest class probabilities per block key; a type whose block matched a rule is left out of it;
+    blocks with no (remaining) windows are NaN."""
+    from .forest import block_shares, feature_matrix, forest_proba
+    use = {}
+    for d, w in classified.items():
+        if not len(w):
+            continue
+        k = _key(w["w_start"], int(round(block_minutes * 60 * 1e9)))
+        b = per[d]
+        ruled = set(b.index[b["rule"].notna().to_numpy()]) if "rule" in b else set()
+        use[d] = w[~np.isin(k, list(ruled))]
+    sh = block_shares(use, block_minutes, by_unit=False)
+    classes = list(forest["classes"])
+    M = pd.DataFrame(np.nan, index=keys, columns=classes)
+    if len(sh):
+        sh = sh[sh.index.isin(keys)]
+        M.loc[sh.index] = forest_proba(forest, feature_matrix(sh, forest["features"]))
+    return M, classes, forest.get("min_score", 0.0)
+
+
 def classify_multi(raw, mlib, period=None):
     """{detector: raw detections (whistle contours / clicks)} -> ({detector: windows}, blocks)."""
     wins, evs, libs = {}, {}, {}
@@ -156,4 +184,4 @@ def classify_multi(raw, mlib, period=None):
         libs[d] = lib
     if not libs:
         raise ValueError("No detections of the library's detection types: " + ", ".join(mlib["detectors"]))
-    return wins, merged_blocks(wins, evs, libs, mlib.get("weights"), period)
+    return wins, merged_blocks(wins, evs, libs, mlib.get("weights"), period, forest=mlib.get("forest"))

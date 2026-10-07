@@ -570,17 +570,15 @@ def _zip_info(path):
 
 
 # ============================================================================ call-type layers ======
-TYPE_NAMES = {"": "Combined", "__whistle": "Whistles", "__click": "Clicks"}
-
-
-def _layer_data(p, name, block_minutes, min_score, variant=""):
-    """Held-out rows and performance of one layer (cached per file version and threshold). ``variant``: ""
-    (the layer's main result: combined when there are several detection types) or "__<type>"."""
+def _layer_data(p, name, block_minutes, min_score, variant=None):
+    """Held-out rows and performance of one layer (cached per file version and threshold). ``variant``: the
+    held-out file stem relative to the project (default ``discover/heldout_<name>``)."""
     import json
 
     from speciesclassifiers.calltypes import multiclass as mc
-    f = p.folder / "discover" / f"heldout_{name}{variant}.csv"
-    meta = json.loads((p.folder / "discover" / f"heldout_{name}{variant}.json").read_text())
+    stem = variant or f"discover/heldout_{name}"
+    f = p.folder / f"{stem}.csv"
+    meta = json.loads((p.folder / f"{stem}.json").read_text())
     key = ("layer", str(f), f.stat().st_mtime, block_minutes)
     if key not in _CACHE:
         wp = pd.read_csv(f, dtype={"unit": str, "true": str, "day": str})
@@ -600,22 +598,32 @@ async def layer_section(p, saver, name, block_minutes):
     within = " > ".join(meta.get("path") or [])
     unit = "event" if meta.get("unit") == "event_id" else meta.get("unit", "day")
     types = meta.get("types") or []
-    variants = [""] + [f"__{t}" for t in types if (p.folder / "discover" / f"heldout_{name}__{t}.json").is_file()] \
-        if meta.get("merged") else [""]
-    view = {"v": ""}
+    forest = saver.get("decision.method") == "forest" and (p.folder / "forest" / f"heldout_{name}.json").is_file()
+    variants = {}
+    if forest:
+        variants[f"forest/heldout_{name}"] = "Forest (final)"
+    variants[f"discover/heldout_{name}"] = "Multiplied" if forest else ("Combined" if meta.get("merged") else "")
+    for t in types if meta.get("merged") else []:
+        if (p.folder / "discover" / f"heldout_{name}__{t}.json").is_file():
+            variants[f"discover/heldout_{name}__{t}"] = {"whistle": "Whistles", "click": "Clicks"}.get(t, t)
+    first = next(iter(variants))
+    view = {"v": first}
     with ui.card().classes("w-full p-4").props("flat bordered"):
         ui.label(f"Layer: {name}" + (f"  ·  within {within}" if within else "")).classes("text-lg font-medium")
         ui.label(f"Classes: {', '.join(meta['classes'])}. Tested by leaving out one {unit} at a time; blocks are "
                  f"{block_minutes} min.").classes("text-sm text-gray-600")
         if len(variants) > 1:
-            ui.label("Each detection type is clustered on its own; 'Combined' multiplies their evidence per block "
-                     "(the decision new data gets). A class one type hasn't learned counts as neutral for it."
-                     ).classes("text-xs text-gray-500")
+            ui.label("Each detection type is clustered on its own. " + (
+                "'Forest (final)': a random forest decides each block from the share of its windows in each "
+                "cluster, tested strictly (clusters redone without each held-out event); this is what new data "
+                "gets. 'Multiplied' multiplies each type's evidence instead." if forest else
+                "'Combined' multiplies their evidence per block (the decision new data gets). A class one type "
+                "hasn't learned counts as neutral for it.")).classes("text-xs text-gray-500")
+
             async def pick(e):
                 view["v"] = e.value
                 await show()
-            ui.toggle({v: TYPE_NAMES.get(v, v.strip("_")) for v in variants}, value="",
-                      on_change=pick).props("dense no-caps")
+            ui.toggle(variants, value=first, on_change=pick).props("dense no-caps")
         cur = float((saver.get("decision.min_scores") or {}).get(name, 0.0))
         with ui.row().classes("items-center gap-4 w-full"):
             ui.label("Minimum block score").classes("text-sm")
@@ -664,15 +672,22 @@ async def layer_section(p, saver, name, block_minutes):
                     s1, s2 = ImageSlot("w-[24rem]"), ImageSlot("w-[22rem]")
                     with ui.column().classes("min-w-64"):
                         table(rec, rows=12)
-            what = TYPE_NAMES.get(v, "") + ": " if len(variants) > 1 else ""
+            what = variants.get(v, "") + ": " if len(variants) > 1 else ""
             await s1.fill(lambda: draw_curve(bc, t, f"{what}blocks, threshold curve"))
             await s2.fill(lambda: draw_conf(bp["confusion"], f"{what}blocks (rows: true)"))
         sl.on("change", show)
         await show()
-        files = [(TYPE_NAMES[f"__{t}"], p.folder / "discover" / f"clusters_{name}__{t}.csv") for t in types] or \
+        files = [({"whistle": "Whistles", "click": "Clicks"}.get(t, t), p.folder / "discover" / f"clusters_{name}__{t}.csv") for t in types] or \
             [("", p.folder / "discover" / f"clusters_{name}.csv")]
         if not files[0][1].is_file():
             files = [("", p.folder / "discover" / "clusters.csv")]
+        imp = _csv(p.folder / "forest" / f"importance_{name}.csv") if forest else None
+        if imp is not None:
+            with ui.expansion("Forest: which clusters matter", icon="park").classes("w-full"):
+                ui.label("Importance of each input (share of a block's windows in a cluster of a detection type) "
+                         "to the final forest; see the cluster tables below for what each cluster is.").classes(
+                    "text-xs text-gray-500")
+                table(imp.round(4), rows=15)
         for what, cf in files:
             cl = _csv(cf)
             if cl is None:
