@@ -99,10 +99,7 @@ def tensorflow_box(p, start_run):
 
 
 def colab_steps(p, start_run):
-    if (p.config().get("data") or {}).get("source") == "multi":
-        ui.label("Training several detection types in Google Colab isn't available yet: install TensorFlow to "
-                 "train on this computer, or use one detection type in Colab.").classes("text-sm text-gray-600")
-        return
+    multi = (p.config().get("data") or {}).get("source") == "multi"
     states = p.stage_states()
     frames_done = states.get("frames") == "done"
 
@@ -139,9 +136,12 @@ def colab_steps(p, start_run):
             ui.label("saved in the project's colab folder").classes("text-gray-500")
         with ui.row().classes("items-center gap-2"):
             ui.label("c.")
-            ui.link("Open the training notebook in Colab", colab.COLAB_URL, new_tab=True)
+            ui.link("Open the training notebook in Colab", colab.notebook_url(p.config()), new_tab=True)
         ui.label("In Colab: upload the bundle (Files panel), set BUNDLE = \"<bundle name>.zip\", then "
-                 "Runtime > Run all. The results zip downloads at the end.").classes("text-gray-600 ml-5")
+                 "Runtime > Run all. The results zip downloads at the end." +
+                 (" For a GPU: Runtime > Change runtime type > T4 GPU. Every detection type is cross-validated, "
+                  "then the final models and the final layer are trained." if multi else "")).classes(
+            "text-gray-600 ml-5")
         with ui.row().classes("items-center gap-2"):
             ui.label("d.")
             ui.button("Import results from Colab", icon="upload", on_click=import_zip).props("dense outline")

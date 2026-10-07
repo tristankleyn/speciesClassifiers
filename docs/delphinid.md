@@ -31,4 +31,4 @@ In the app, data source **Whistles and/or clicks**: each ticked type gets its ow
 3. **Final models**: one PAMGuard zip per type (each also usable on its own in PAMGuard) and the final forest.
 4. **New data**: frames from binaries (or frames CSVs) are predicted with each type's zip and each block is decided by the final forest (`apply/blocks.csv`).
 
-Training several types in Google Colab isn't supported yet; it needs TensorFlow on this computer.
+**Google Colab** (free GPU, nothing to install): on the Run screen, *Make Colab bundle* packs the project's frames and settings; notebook `02b_train_delphinID_types` runs the project's own cross-validation, final models and final layer from the bundle (`speciesclassifiers.project.colab.run_bundle`) and downloads a results zip; *Import results from Colab* puts them back into the project, where they count as done while the settings are unchanged. The GPU helps less than for large networks (the CNN is small): setting **Folds** (e.g. 10) cuts the number of models far more than leaving one event out at a time.

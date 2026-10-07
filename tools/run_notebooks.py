@@ -17,7 +17,7 @@ from nbclient import NotebookClient
 
 HERE = Path(__file__).resolve().parents[1] / "notebooks" / "python"
 # 01 needs PAMGuard binaries, so it isn't run here
-DEFAULT = ["02_train_delphinID", "03_randomforest", "04_transferlearning", "05_calltypes"]
+DEFAULT = ["02_train_delphinID", "02b_train_delphinID_types", "03_randomforest", "04_transferlearning", "05_calltypes"]
 # Smaller settings so the smoke test is quick (parameter assignments are replaced before running)
 QUICK = {"02_train_delphinID": {"EPOCHS": 2, "N_BOOTSTRAPS": 1, "N_FOLDS": 2}}
 

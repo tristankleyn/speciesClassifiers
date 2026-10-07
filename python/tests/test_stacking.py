@@ -64,3 +64,28 @@ def test_delphinid_multi_project(tmp_path):
     assert h["unit"].nunique() == 18 and {"p_SpA", "p_SpB", "p_SpC"} <= set(h.columns)
     b = pd.read_csv(p.folder / "apply" / "blocks.csv")
     assert len(b) == 18 and {"n_whistle", "n_click", "decision"} <= set(b.columns)
+
+
+def test_delphinid_multi_colab_roundtrip(tmp_path, monkeypatch):
+    """Bundle -> run_bundle (as notebook 02b) -> import: crossval, model and final count as done."""
+    import pytest
+    from speciesclassifiers.project import Project, checks, colab, run
+    from speciesclassifiers.project.workflows import dl_multi_example
+    if not checks.tensorflow_status()["ok"]:
+        pytest.skip("TensorFlow not installed")
+    cfg = dl_multi_example()
+    cfg["settings"]["training"]["epochs"] = 2
+    cfg["settings"]["resampling"]["n_bootstraps"] = 1
+    p = Project.create(tmp_path / "dl", "delphinid", config=cfg)
+    assert run(p.folder, ["frames"]) == "finished"
+    b = colab.make_bundle(p.folder)
+    assert colab.notebook_url(p.config()) == colab.COLAB_URL_TYPES
+    monkeypatch.chdir(tmp_path)
+    res = colab.run_bundle(b, tmp_path / "work")
+    msgs = colab.import_results(p.folder, res)
+    assert len(msgs) == 3
+    s = p.stage_states()
+    assert s["crossval"] == s["model"] == s["final"] == "done"
+    assert len(list((p.folder / "model").glob("*.zip"))) == 2
+    assert run(p.folder, ["apply"]) == "finished"            # nothing retrained; new data classified
+    assert "Final model + PAMGuard zip: up to date" in p.log_path.read_text()
