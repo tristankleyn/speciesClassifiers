@@ -26,6 +26,8 @@ class _Tee:
         self._buf = ""
 
     def write(self, s):
+        if self.log.closed:
+            return len(s)
         self.log.write(s)
         self.log.flush()
         if self.echo:
@@ -46,7 +48,11 @@ class _Tee:
         return len(s)
 
     def flush(self):
-        self.log.flush()
+        if not self.log.closed:
+            self.log.flush()
+
+    def close(self):          # logging handlers (e.g. TensorFlow's) close their stream at exit
+        pass
 
     def isatty(self):
         return False

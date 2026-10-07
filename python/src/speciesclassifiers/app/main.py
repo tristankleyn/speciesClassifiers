@@ -200,6 +200,10 @@ async def example_dialog():
         choices.insert(1, ("randomforest", "Random forest: whistles + clicks",
                            "A base random forest per detection type (whistle contours, click spectra) and a final "
                            "forest that decides each time block from both.", rf_binaries_example))
+        from speciesclassifiers.project.workflows import dl_multi_example
+        choices.insert(3, ("delphinid", "delphinID: whistles + clicks",
+                           "A delphinID model per detection type (whistle and click frames) and a final forest that "
+                           "decides each time block from both. Needs TensorFlow.", dl_multi_example))
         for i, (c, title, desc, _) in enumerate(choices):
             with ui.card().classes("w-full cursor-pointer hover:bg-slate-50").on(
                     "click", lambda i=i: dialog.submit(i)):
@@ -238,7 +242,8 @@ def project_page(path: str):
     saver = Saver(p, on_saved)
     steps = (["data", "labels"] if kind == "calltypes" else ["data"]) + ["settings", "run", "results", "apply"]
     names = {"data": "Data", "labels": "Labels", "settings": "Settings", "run": "Run", "results": "Results",
-             "apply": "Export to PAMGuard" if kind == "delphinid" else "Classify new data · export"}
+             "apply": "Export to PAMGuard" if kind == "delphinid" and cfg["data"].get("source") != "multi"
+             else "Classify new data · export"}
     titles = {s: f"{k} · {names[s]}" for k, s in enumerate(steps, 1)}
 
     with ui.row().classes("w-full no-wrap items-start p-2 gap-4"):
@@ -379,9 +384,10 @@ def dl_data_panel(p, saver):
                 "periods: `event_id, label, start, end` (UTC), one row per period (several periods can share an "
                 "event). Only detections inside annotated periods are used. Or use frames already made with "
                 "notebook 01.")
-    ui.select({"binaries": "PAMGuard binaries + annotations CSV", "frames": "Frames CSV made with notebook 01"},
+    ui.select({"binaries": "PAMGuard binaries + annotations CSV", "frames": "Frames CSV made with notebook 01",
+               "multi": "Whistles and/or clicks: a model per type + a final layer per block"},
               value=saver.get("data.source"), label="Source",
-              on_change=lambda e: (saver.set("data.source", e.value), opts.refresh())).classes("w-96")
+              on_change=lambda e: (saver.set("data.source", e.value), opts.refresh())).classes("w-[32rem]")
 
     def set_voc(v):
         saver.set("data.voc_type", v)
@@ -394,6 +400,10 @@ def dl_data_panel(p, saver):
 
     @ui.refreshable
     def opts():
+        if saver.get("data.source") == "multi":
+            from .stacked import dl_types_panel
+            dl_types_panel(saver)
+            return
         if saver.get("data.source") == "frames":
             path_row(saver, "data.frames_csv", "Frames CSV", "file", (".csv",))
             path_row(saver, "data.frames_params", "Frame parameters JSON (made with the frames)", "file", (".json",))

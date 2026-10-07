@@ -99,6 +99,10 @@ def tensorflow_box(p, start_run):
 
 
 def colab_steps(p, start_run):
+    if (p.config().get("data") or {}).get("source") == "multi":
+        ui.label("Training several detection types in Google Colab isn't available yet: install TensorFlow to "
+                 "train on this computer, or use one detection type in Colab.").classes("text-sm text-gray-600")
+        return
     states = p.stage_states()
     frames_done = states.get("frames") == "done"
 

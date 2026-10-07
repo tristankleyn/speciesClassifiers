@@ -89,6 +89,29 @@ def check_dl_data(d):
     """delphinID: binaries + an annotations CSV, or a frames CSV (+ its params JSON) from notebook 01."""
     from speciesclassifiers.delphinid import AcousticParams
     r = _result()
+    if d["source"] == "multi":
+        types = [t for t, dflt in (("whistle", True), ("click", False)) if d.get(f"use_{t}s", dflt)]
+        if not types:
+            return _err(r, "Choose at least one detection type.")
+        need_ann = False
+        for t in types:
+            if d.get(f"{t}_source", "binaries") == "frames":
+                sub = check_dl_data({"source": "frames", "frames_csv": d.get(f"{t}_frames_csv"),
+                                     "frames_params": d.get(f"{t}_frames_params")})
+            else:
+                sub = check_binaries(d.get("binary_folder"), t)
+                need_ann = True
+            r["messages"] += [(lvl, f"{t.capitalize()}s: {m}") for lvl, m in sub["messages"]]
+            r["ok"] &= sub["ok"]
+            if sub["table"] is not None:
+                r["table"] = sub["table"]
+        if need_ann:
+            sub = check_dl_data({"source": "binaries", "binary_folder": d.get("binary_folder"),
+                                 "annotations": d.get("annotations"), "voc_type": types[0]})
+            r["messages"] += [m for m in sub["messages"] if "binary files" not in m[1]]
+            r["ok"] &= sub["ok"]
+            r["table"] = sub["table"]
+        return r
     if d["source"] == "frames":
         for k, what in (("frames_csv", "Frames CSV"), ("frames_params", "Parameters JSON")):
             if not d.get(k) or not Path(d[k]).is_file():

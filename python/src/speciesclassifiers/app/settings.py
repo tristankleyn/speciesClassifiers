@@ -247,6 +247,65 @@ def _rf_defaults():
 
 _fill_defaults(RANDOMFOREST, _rf_defaults())
 
+MULTI = ("data.source", "multi")
+DELPHINID += [
+    ("Whistle frames", [
+        {"key": "data.acoustic_by_type.whistle.fmin_hz", "label": "Lowest frequency (Hz)", "kind": "number",
+         "step": 1000},
+        {"key": "data.acoustic_by_type.whistle.fmax_hz", "label": "Highest frequency (Hz)", "kind": "number",
+         "step": 1000},
+        {"key": "data.acoustic_by_type.whistle.frame_len", "label": "Frame length (s)", "kind": "number", "step": 0.5},
+        {"key": "data.acoustic_by_type.whistle.hop", "label": "Step between frames (s)", "kind": "number",
+         "step": 0.5},
+        {"key": "data.acoustic_by_type.whistle.min_density", "label": "Min whistle density (0-1)", "kind": "number",
+         "step": 0.01},
+        {"key": "data.acoustic_by_type.whistle.min_frag_ms", "label": "Shortest contour (ms)", "kind": "number",
+         "step": 50, "advanced": True},
+        {"key": "data.acoustic_by_type.whistle.downsample", "label": "Downsampling (bins averaged)", "kind": "int",
+         "advanced": True},
+    ]),
+    ("Click frames", [
+        {"key": "data.acoustic_by_type.click.fmin_hz", "label": "Lowest frequency (Hz)", "kind": "number",
+         "step": 1000},
+        {"key": "data.acoustic_by_type.click.fmax_hz", "label": "Highest frequency (Hz)", "kind": "number",
+         "step": 1000},
+        {"key": "data.acoustic_by_type.click.frame_len", "label": "Frame length (s)", "kind": "number", "step": 0.5},
+        {"key": "data.acoustic_by_type.click.hop", "label": "Step between frames (s)", "kind": "number", "step": 0.5},
+        {"key": "data.acoustic_by_type.click.min_clicks", "label": "Min clicks per frame", "kind": "int", "min": 1},
+        {"key": "data.acoustic_by_type.click.fft_len", "label": "Click FFT length", "kind": "int", "advanced": True},
+        {"key": "data.acoustic_by_type.click.smooth_window", "label": "Spectrum smoothing (bins)", "kind": "int",
+         "advanced": True},
+        {"key": "data.acoustic_by_type.click.downsample", "label": "Downsampling (bins averaged)", "kind": "int",
+         "advanced": True},
+    ]),
+    ("Final layer (blocks)", [
+        {"key": "final.block_minutes", "label": "Block length", "kind": "select",
+         "options": {1: "1 min", 2: "2 min", 5: "5 min", 10: "10 min", 15: "15 min", 20: "20 min", 30: "30 min",
+                     60: "1 hour"}},
+        {"key": "final.n_trees", "label": "Trees", "kind": "int", "min": 10, "step": 100},
+        {"key": "final.node_size", "label": "Min blocks per leaf", "kind": "int", "min": 1, "advanced": True},
+    ]),
+]
+for _title, _specs in DELPHINID[-3:]:
+    for _s in _specs:
+        _s.setdefault("when", MULTI)
+        if _title.startswith("Whistle"):
+            _s.setdefault("also", ("data.use_whistles", True))
+        elif _title.startswith("Click"):
+            _s.setdefault("also", ("data.use_clicks", True))
+for _title, _specs in DELPHINID:
+    for _s in _specs:
+        if _s["key"] in ("settings.crossval.run",):
+            _s["help"] = "always on with several detection types (the final layer needs held-out predictions)"
+
+
+def _dl_defaults():
+    from speciesclassifiers.project.workflows import dl_defaults
+    return dl_defaults()
+
+
+_fill_defaults(DELPHINID, _dl_defaults())
+
 SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID}
 # values of keys that older projects may not have yet
 CONDITION_DEFAULTS = {"data.use_whistles": True, "data.use_clicks": False, "decision.method": "multiply"}

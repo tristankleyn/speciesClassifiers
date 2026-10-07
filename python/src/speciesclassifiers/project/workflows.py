@@ -993,7 +993,16 @@ def dl_defaults():
     from speciesclassifiers.delphinid import CNNParams, TrainingParams
     return {
         "data": {"source": "binaries", "binary_folder": "", "annotations": "", "voc_type": "whistle",
-                 "sample_rate": None, "frames_csv": "", "frames_params": ""},
+                 "sample_rate": None, "frames_csv": "", "frames_params": "",
+                 # source "multi": several detection types, each from binaries or frames, + a final forest
+                 "use_whistles": True, "use_clicks": False, "whistle_source": "binaries", "click_source": "binaries",
+                 "whistle_frames_csv": "", "whistle_frames_params": "", "click_frames_csv": "",
+                 "click_frames_params": "",
+                 "acoustic_by_type": {
+                     "whistle": {"fmin_hz": 2000.0, "fmax_hz": 20000.0, "frame_len": 4.0, "hop": 4.0, "downsample": 2,
+                                 "min_density": 0.05, "min_frag_ms": 200.0},
+                     "click": {"fmin_hz": 10000.0, "fmax_hz": 40000.0, "frame_len": 4.0, "hop": 4.0, "downsample": 2,
+                               "min_clicks": 3, "fft_len": 512, "smooth_window": 3}}},
         "labels": {"classes": [], "group_col": "event_id"},
         "settings": {
             "acoustic": {"fmin_hz": 2000.0, "fmax_hz": 20000.0, "frame_len": 4.0, "hop": 4.0, "downsample": 2,
@@ -1004,8 +1013,46 @@ def dl_defaults():
             "resampling": {"max_per_group": 30, "n_bootstraps": 5},
             "crossval": {"run": True, "n_folds": None},
         },
+        "final": {"block_minutes": 10, "n_trees": 500, "node_size": 1},
+        "decision": {"min_scores": {}},
+        "new_data": {"source": "binaries", "binary_folder": "", "start": "", "end": "",
+                     "whistle_frames_csv": "", "click_frames_csv": ""},
         "model_name": "delphinID_whistles",
     }
+
+
+def dl_multi_example():
+    """delphinID on synthetic whistle and click frames of the same events, with the final forest per block."""
+    ex = {t: (str(EXAMPLES / f"frames{'' if t == 'whistle' else '_click'}_example_synthetic.csv"),
+              str(EXAMPLES / f"frames{'' if t == 'whistle' else '_click'}_example_synthetic_params.json"))
+          for t in ("whistle", "click")}
+    return {"data": {"source": "multi", "use_whistles": True, "use_clicks": True,
+                     **{f"{t}_source": "frames" for t in ex},
+                     **{f"{t}_frames_csv": v[0] for t, v in ex.items()},
+                     **{f"{t}_frames_params": v[1] for t, v in ex.items()}},
+            "settings": {"training": {"epochs": 8}, "resampling": {"n_bootstraps": 2},
+                         "crossval": {"run": True, "n_folds": 3}},
+            "final": {"block_minutes": 10, "n_trees": 200},
+            "new_data": {"source": "frames", **{f"{t}_frames_csv": v[0] for t, v in ex.items()}},
+            "model_name": "delphinID_example"}
+
+
+def dl_multi(cfg):
+    return cfg["data"].get("source") == "multi"
+
+
+def dl_types(cfg):
+    d = cfg["data"]
+    return [t for t, on in (("whistle", d.get("use_whistles", True)), ("click", d.get("use_clicks", False))) if on]
+
+
+def dl_acoustic_type(cfg, voc_type):
+    from speciesclassifiers.delphinid import AcousticParams
+    a = dict(dl_defaults()["data"]["acoustic_by_type"][voc_type])
+    a.update((cfg["data"].get("acoustic_by_type") or {}).get(voc_type) or {})
+    fr = (float(a.pop("fmin_hz")), float(a.pop("fmax_hz")))
+    return AcousticParams(voc_type=voc_type, freq_range=fr,
+                          **{k: v for k, v in a.items() if k in AcousticParams.__dataclass_fields__})
 
 
 def dl_example():
@@ -1031,8 +1078,41 @@ def dl_acoustic(cfg):
     return AcousticParams(voc_type=cfg["data"]["voc_type"], freq_range=fr, **a)
 
 
+def dl_frames_multi(p, cfg):
+    import shutil
+    d = cfg["data"]
+    out = p.stage_dir("frames")
+    for f in [*out.glob("frames_*.csv"), *out.glob("params_*.json")]:
+        f.unlink()
+    g = cfg["labels"].get("group_col") or "event_id"
+    counts = []
+    for ty in dl_types(cfg):
+        if d.get(f"{ty}_source", "binaries") == "frames":
+            shutil.copy(d[f"{ty}_frames_csv"], out / f"frames_{ty}.csv")
+            shutil.copy(d[f"{ty}_frames_params"], out / f"params_{ty}.json")
+            frames = pd.read_csv(out / f"frames_{ty}.csv")
+        else:
+            from speciesclassifiers.delphinid import make_frames
+            acoustic = dl_acoustic_type(cfg, ty)
+            print(f"Making {ty} frames from the annotated periods...")
+            frames, info = make_frames(d["binary_folder"], d["annotations"], acoustic,
+                                       sample_rate=d.get("sample_rate"))
+            frames.to_csv(out / f"frames_{ty}.csv", index=False)
+            _write_json({"acoustic_params": acoustic.to_dict(), "sample_rate": info["sample_rate"],
+                         "recording_settings": info, "binary_folder": d["binary_folder"],
+                         "annotations_csv": d["annotations"]}, out / f"params_{ty}.json")
+        frames["label"] = frames["label"].astype(str)
+        c = frames.groupby("label").agg(groups=(g, "nunique"), frames=(g, "size"))
+        counts.append(c.add_prefix(f"{ty}_"))
+        print(f"{ty}s: {len(frames)} frames, {frames[g].nunique()} groups, {frames['label'].nunique()} labels")
+    pd.concat(counts, axis=1).fillna(0).astype(int).rename_axis("label").reset_index().to_csv(
+        out / "class_counts.csv", index=False)
+
+
 def dl_frames(p, cfg):
     import shutil
+    if dl_multi(cfg):
+        return dl_frames_multi(p, cfg)
     d = cfg["data"]
     out = p.stage_dir("frames")
     if d["source"] == "frames":
@@ -1057,10 +1137,12 @@ def dl_frames(p, cfg):
     print(f"{len(frames)} frames, {frames[g].nunique()} groups, {frames['label'].nunique()} labels")
 
 
-def dl_training_data(p, cfg):
-    """Frames, classes, acoustic params and sample rate for training (labels with < 2 groups dropped)."""
+def dl_training_data(p, cfg, voc_type=None):
+    """Frames, classes, acoustic params and sample rate for training (labels with < 2 groups dropped).
+    ``voc_type``: one detection type's frames (several detection types)."""
     from speciesclassifiers.delphinid import AcousticParams
-    frames = pd.read_csv(p.folder / "frames" / "frames.csv")
+    sfx = f"_{voc_type}" if voc_type else ""
+    frames = pd.read_csv(p.folder / "frames" / f"frames{sfx}.csv")
     frames["label"] = frames["label"].astype(str)
     g = cfg["labels"].get("group_col") or "event_id"
     if cfg["labels"].get("classes"):
@@ -1070,7 +1152,7 @@ def dl_training_data(p, cfg):
     if few:
         print(f"Leaving out labels with fewer than 2 groups: {few}")
         frames = frames[~frames["label"].isin(few)]
-    meta = read_json(p.folder / "frames" / "params.json")
+    meta = read_json(p.folder / "frames" / f"params{sfx}.json")
     acoustic = AcousticParams(**{k: v for k, v in meta["acoustic_params"].items()
                                  if k in AcousticParams.__dataclass_fields__})
     return frames.reset_index(drop=True), sorted(frames["label"].unique()), acoustic, meta.get("sample_rate"), g
@@ -1082,9 +1164,40 @@ def dl_params(cfg):
     return CNNParams(**s["cnn"]), TrainingParams(**s["training"]), ResamplingParams(**s["resampling"])
 
 
+def dl_frame_ids(frames):
+    return (frames["event_id"].astype(str) + "_" + frames["frame_start"].round(3).astype(str)).to_numpy()
+
+
+def dl_crossval_multi(p, cfg):
+    from speciesclassifiers.delphinid import cross_validate, summarise
+    out = p.stage_dir("crossval")
+    for f in out.glob("cv_*"):
+        f.unlink()
+    cnn, training, resampling = dl_params(cfg)
+    n_folds = cfg["settings"]["crossval"].get("n_folds")
+    summ = {}
+    for ty in dl_types(cfg):
+        frames, classes, acoustic, _, g = dl_training_data(p, cfg, ty)
+        print(f"{ty.capitalize()}s: {len(classes)} classes, {frames[g].nunique()} groups"
+              + (f", {n_folds} folds" if n_folds else ", leaving out one group at a time"))
+        preds, hist = cross_validate(frames, classes, "label", g, cnn, training, resampling, n_folds=n_folds,
+                                     classifier=f"{cfg.get('model_name', 'delphinID')}_{ty}", voc_type=ty)
+        start = pd.Series(frames["frame_start"].to_numpy(float), index=dl_frame_ids(frames))
+        preds["start"] = preds["detection_id"].map(start).to_numpy()
+        preds.to_csv(out / f"cv_{ty}.csv", index=False)
+        hist.to_csv(out / f"cv_history_{ty}.csv", index=False)
+        s = summarise(preds)
+        summ[ty] = {"frame_accuracy": s["frame_accuracy"], "event_accuracy": s["event_accuracy"],
+                    "event_accuracy_by_class": s["event_accuracy_by_class"].to_dict()}
+        print(f"  {ty}s: frame accuracy {s['frame_accuracy']:.0%}, event accuracy {s['event_accuracy']:.0%}")
+    _write_json(summ, out / "cv_summary.json")
+
+
 def dl_crossval(p, cfg):
     require_tensorflow()
     from speciesclassifiers.delphinid import cross_validate, summarise
+    if dl_multi(cfg):
+        return dl_crossval_multi(p, cfg)
     frames, classes, acoustic, _, g = dl_training_data(p, cfg)
     cnn, training, resampling = dl_params(cfg)
     n_folds = cfg["settings"]["crossval"].get("n_folds")
@@ -1101,9 +1214,39 @@ def dl_crossval(p, cfg):
     print(f"Frame accuracy {s['frame_accuracy']:.0%}, event accuracy {s['event_accuracy']:.0%}")
 
 
+def dl_model_multi(p, cfg):
+    from speciesclassifiers.delphinid import export_pamguard, fit_bootstrapped
+    cnn, training, resampling = dl_params(cfg)
+    out = p.stage_dir("model")
+    for old in [*out.glob("*.zip"), *out.glob("history*.csv")]:
+        old.unlink()
+    base = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in cfg.get("model_name") or "delphinID")
+    cv = read_json(p.folder / "crossval" / "cv_summary.json") or {}
+    models = {}
+    for ty in dl_types(cfg):
+        frames, classes, acoustic, sr, g = dl_training_data(p, cfg, ty)
+        print(f"Training the final {ty} model on all {len(frames)} frames ({resampling.n_bootstraps} bootstraps)...")
+        model, hist = fit_bootstrapped(frames, classes, "label", g, cnn, training, resampling, progress=True)
+        hist.to_csv(out / f"history_{ty}.csv", index=False)
+        info = {"cnn_params": cnn.to_dict(), "training_params": training.to_dict(),
+                "resampling_params": resampling.to_dict(),
+                "training_data": {"n_frames": len(frames), "group_col": g,
+                                  "groups_per_class": frames.groupby("label")[g].nunique().to_dict()}}
+        if ty in cv:
+            info["cross_validation"] = cv[ty]
+        z = export_pamguard(model, acoustic, classes, out / f"{base}_{ty}", sample_rate=sr, info=info)
+        models[ty] = {"zip": Path(z).name, "classes": classes, "acoustic_params": acoustic.to_dict(),
+                      "sample_rate": sr}
+        print(f"Saved the PAMGuard model {z}")
+        del model
+    _write_json(models, out / "models.json")
+
+
 def dl_model(p, cfg):
     require_tensorflow()
     from speciesclassifiers.delphinid import export_pamguard, fit_bootstrapped
+    if dl_multi(cfg):
+        return dl_model_multi(p, cfg)
     frames, classes, acoustic, sr, g = dl_training_data(p, cfg)
     cnn, training, resampling = dl_params(cfg)
     print(f"Training the final model on all {len(frames)} frames ({resampling.n_bootstraps} bootstraps)...")
@@ -1124,6 +1267,70 @@ def dl_model(p, cfg):
     print(f"Saved the PAMGuard model {z}")
 
 
+def dl_final(p, cfg):
+    types = [t for t in dl_types(cfg) if (p.folder / "crossval" / f"cv_{t}.csv").is_file()]
+    preds = pd.concat([pd.read_csv(p.folder / "crossval" / f"cv_{t}.csv") for t in types], ignore_index=True)
+    final_stage(p.stage_dir("final"), preds, types, cfg["final"])
+
+
+def dl_new_frames(n, cfg, voc_type, acoustic, sample_rate):
+    """Frames of new, unlabelled data: from binaries (event = UTC day) or a frames CSV."""
+    if n.get("source") == "frames":
+        return pd.read_csv(n[f"{voc_type}_frames_csv"])
+    from speciesclassifiers.delphinid import click_frames, whistle_frames
+    from speciesclassifiers.io import read_clicks, read_whistles
+    t0 = pd.Timestamp(n["start"], tz="UTC").timestamp() if n.get("start") else 0
+    t1 = pd.Timestamp(n["end"], tz="UTC").timestamp() + 86400 if n.get("end") else 4e9
+    per = [(t0, t1)] if (n.get("start") or n.get("end")) else None
+    if voc_type == "click":
+        det, sr = read_clicks(n["binary_folder"], per, sample_rate)
+    else:
+        det, _ = read_whistles(n["binary_folder"], per, sample_rate)
+    det = det[(det["start"] >= t0) & (det["start"] < t1)].reset_index(drop=True)
+    det["event_id"] = pd.to_datetime(det["start"], unit="s", utc=True).dt.strftime("%Y%m%d")
+    return click_frames(det, acoustic, sr) if voc_type == "click" else whistle_frames(det, acoustic)
+
+
+def dl_apply(p, cfg):
+    """New data: each type's PAMGuard model predicts its frames; the final forest decides each block."""
+    require_tensorflow()
+    from speciesclassifiers.delphinid import AcousticParams, load_pamguard_zip
+    from speciesclassifiers.delphinid.crossval import feature_columns, to_standard_output
+    from speciesclassifiers.delphinid.export import cleanup
+    from speciesclassifiers.randomforest import RandomForestModel
+    from speciesclassifiers.stacking import block_vectors, decide_blocks
+    models = read_json(p.folder / "model" / "models.json")
+    n = cfg["new_data"]
+    out = p.stage_dir("apply")
+    preds = []
+    for ty, m in models.items():
+        acoustic = AcousticParams(**{k: v for k, v in m["acoustic_params"].items()
+                                     if k in AcousticParams.__dataclass_fields__})
+        frames = dl_new_frames(n, cfg, ty, acoustic, m.get("sample_rate"))
+        if not len(frames):
+            print(f"No {ty} frames in the new data")
+            continue
+        fn, _ = load_pamguard_zip(p.folder / "model" / m["zip"])
+        try:
+            probs = fn(frames[feature_columns(frames)].to_numpy("float32"))
+        finally:
+            cleanup(fn)
+        pr = to_standard_output(frames, probs, m["classes"], f"{cfg.get('model_name', 'delphinID')}_{ty}", ty)
+        pr["start"] = pr["detection_id"].map(pd.Series(frames["frame_start"].to_numpy(float),
+                                                         index=dl_frame_ids(frames))).to_numpy()
+        pr.to_csv(out / f"frame_predictions_{ty}.csv", index=False)
+        preds.append(pr)
+        print(f"{len(frames)} new {ty} frames")
+    if not preds:
+        raise ValueError("No frames in the new data.")
+    fm = RandomForestModel.load(p.folder / "final" / "final_model.joblib")
+    bm = cfg["final"].get("block_minutes", 10)
+    blocks, _ = block_vectors(pd.concat(preds, ignore_index=True), bm, list(models), by_event=False)
+    res = decide_blocks(fm, blocks, bm, float((cfg.get("decision", {}).get("min_scores") or {}).get("final", 0.0)))
+    res.to_csv(out / "blocks.csv", index=False)
+    print(f"{len(res)} blocks: " + ", ".join(f"{k} {v}" for k, v in res["decision"].value_counts().items()))
+
+
 DELPHINID = Workflow(
     "delphinid", "delphinID (deep learning)",
     "Train a delphinID neural network on detection frames (averaged spectra of whistle contours or clicks) "
@@ -1132,9 +1339,14 @@ DELPHINID = Workflow(
      Stage("crossval", "Cross-validation", dl_crossval,
            ["labels", "settings.cnn", "settings.training", "settings.resampling", "settings.crossval", "model_name"],
            after="frames", optional=True,
-           enabled=lambda cfg: bool(cfg.get("settings", {}).get("crossval", {}).get("run", True))),
+           enabled=lambda cfg: dl_multi(cfg) or bool(cfg.get("settings", {}).get("crossval", {}).get("run", True))),
      Stage("model", "Final model + PAMGuard zip", dl_model,
-           ["labels", "settings.cnn", "settings.training", "settings.resampling", "model_name"], after="frames")],
+           ["labels", "settings.cnn", "settings.training", "settings.resampling", "model_name"], after="frames"),
+     Stage("final", "Final layer: random forest per block (leave one event out)", dl_final, ["final"],
+           after="crossval", optional=True, enabled=dl_multi),
+     Stage("apply", "Classify new data", dl_apply, ["new_data", "decision", "final"], after="model", optional=True,
+           enabled=lambda cfg: dl_multi(cfg) and bool((cfg.get("new_data") or {}).get("binary_folder") or (
+               (cfg.get("new_data") or {}).get("source") == "frames")))],
     dl_defaults, dl_example)
 
 

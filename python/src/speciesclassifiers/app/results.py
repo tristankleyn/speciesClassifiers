@@ -467,6 +467,11 @@ def _event_curve(ev, classes):
 
 async def dl_results(p, saver):
     from speciesclassifiers.plots import plot_confusion
+    if saver.get("data.source") == "multi":
+        from .stacked import stacked_results
+        return await stacked_results(p, saver, "A delphinID model per detection type on its frames, tested by "
+                                     "leaving events out (event accuracy: the mean probabilities of the event's "
+                                     "frames).")
     ui.markdown("#### Cross-validation\nEach fold's frames were classified by a model trained without their "
                 "groups. **Frame accuracy**: single frames (a few seconds each). **Event accuracy**: whole events, "
                 "from the summed probabilities of their frames.")
@@ -544,6 +549,24 @@ async def dl_results(p, saver):
 
 
 async def dl_export(p, saver, start_run):
+    if saver.get("data.source") == "multi":
+        from .stacked import dl_new_data_inputs, stacked_apply
+        f = p.folder
+        outs = [(f"PAMGuard model: {z.stem}", z) for z in sorted((f / "model").glob("*.zip"))]
+        outs += [("Final forest", f / "final" / "final_model.joblib"),
+                 ("Held-out frame predictions: whistles", f / "crossval" / "cv_whistle.csv"),
+                 ("Held-out frame predictions: clicks", f / "crossval" / "cv_click.csv"),
+                 ("Block vectors (training)", f / "final" / "blocks.csv"),
+                 ("New data: block decisions", f / "apply" / "blocks.csv"),
+                 ("New data: whistle frame predictions", f / "apply" / "frame_predictions_whistle.csv"),
+                 ("New data: click frame predictions", f / "apply" / "frame_predictions_click.csv")]
+        await stacked_apply(p, saver, start_run, outs, inputs=dl_new_data_inputs,
+                            intro="Each type's delphinID model predicts its frames; the final forest decides each "
+                                  "clock-aligned block.")
+        ui.markdown("Each type's zip also works on its own in PAMGuard's **Deep Learning Classifier** (whistle "
+                    "model on the Whistle and Moan Detector, click model on the Click Detector); the final forest "
+                    "runs here.").classes("text-sm text-gray-600")
+        return
     ui.markdown("#### Export to PAMGuard\nThe final model is trained on all frames and saved as a zip that "
                 "PAMGuard's **Deep Learning Classifier** loads directly.")
     if not_ready(p, "model", "model"):

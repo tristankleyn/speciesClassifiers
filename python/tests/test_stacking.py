@@ -44,3 +44,23 @@ def test_rf_binaries_project(tmp_path):
     p.update_config({"final": {"n_trees": 100}})
     s = p.stage_states()
     assert s["final"] == "outdated" and s["model"] == "done" and s["crossval"] == "done"
+
+
+def test_delphinid_multi_project(tmp_path):
+    import pytest
+    from speciesclassifiers.project import Project, checks, run
+    from speciesclassifiers.project.workflows import dl_multi_example
+    cfg = dl_multi_example()
+    r = checks.check_dl_data({**cfg["data"]})
+    assert r["ok"] and any("Clicks:" in m for _, m in r["messages"])
+    if not checks.tensorflow_status()["ok"]:
+        pytest.skip("TensorFlow not installed")
+    cfg["settings"]["training"]["epochs"] = 3
+    p = Project.create(tmp_path / "dl", "delphinid", config=cfg)
+    assert run(p.folder) == "finished"
+    assert sorted(z.name for z in (p.folder / "model").glob("*.zip")) == ["delphinID_example_click.zip",
+                                                                         "delphinID_example_whistle.zip"]
+    h = pd.read_csv(p.folder / "final" / "heldout_final.csv")
+    assert h["unit"].nunique() == 18 and {"p_SpA", "p_SpB", "p_SpC"} <= set(h.columns)
+    b = pd.read_csv(p.folder / "apply" / "blocks.csv")
+    assert len(b) == 18 and {"n_whistle", "n_click", "decision"} <= set(b.columns)

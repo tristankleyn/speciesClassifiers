@@ -82,9 +82,13 @@ async def stacked_results(p, saver, base_note):
     with ui.row().classes("gap-3"):
         for f in sorted((p.folder / "crossval").glob("cv_*.csv")):
             ty = f.stem[3:]
-            if ty == "predictions" or ty == "detection_predictions":
+            if ty in ("predictions", "detection_predictions") or ty.startswith("history") or ty == "summary":
                 continue
             preds = await run.io_bound(pd.read_csv, f, dtype={"event_id": str})
+            if "score" not in preds:
+                from speciesclassifiers.randomforest.model import decision_score
+                w = preds.pivot_table(index="detection_id", columns="class", values="probability")
+                preds["score"] = preds["detection_id"].map(pd.Series(decision_score(w.to_numpy()), index=w.index))
             s = await run.io_bound(summarise, preds, 0.0, 0.0)
             metric(f"{TYPE_NAMES.get(ty, ty)}: event accuracy", s["group_accuracy"],
                    hint=f"{len(s['groups'])} events, mean probabilities")
@@ -109,15 +113,19 @@ async def stacked_results(p, saver, base_note):
             table(pd.read_csv(imp).round(4), rows=15)
 
 
-async def stacked_apply(p, saver, start_run, outputs):
-    """New data per detection type, block decisions over time, outputs."""
-    from .results import ImageSlot as _IS, _csv, metric, output_row, timeline_fig  # noqa: F401
+async def stacked_apply(p, saver, start_run, outputs, inputs=None, intro=None):
+    """New data per detection type, block decisions over time, outputs. ``inputs``: function drawing the new
+    data inputs (default: source and path per detection type)."""
+    from .results import _csv, metric, output_row, timeline_fig
     cfg = saver.project.config()
-    ui.markdown("#### Classify new data\nThe base classifiers predict each detection; the final forest decides "
-                "each clock-aligned block. Optionally limit to a date range.")
+    ui.markdown("#### Classify new data\n" + (intro or "The base classifiers predict each detection; the final "
+                                                   "forest decides each clock-aligned block.") +
+                " Optionally limit to a date range.")
     d = cfg["data"]
+    if inputs:
+        inputs(saver)
     for ty, dflt in (("whistle", True), ("click", False)):
-        if not d.get(f"use_{ty}s", dflt):
+        if inputs or not d.get(f"use_{ty}s", dflt):
             continue
         ui.label(TYPE_NAMES[ty]).classes("text-sm font-medium mt-2")
         key = f"new_data.{ty}_source"
@@ -151,3 +159,55 @@ async def stacked_apply(p, saver, start_run, outputs):
     for label, path in outputs:
         if Path(path).is_file():
             output_row(label, path, p.folder)
+
+
+def dl_types_panel(saver):
+    """delphinID with several detection types: which types, and per type binaries or frames from notebook 01."""
+    ui.markdown("Each ticked detection type gets its own delphinID model; their held-out frame probabilities are "
+                "averaged per block and a final random forest decides each block.")
+    with ui.row().classes("gap-6"):
+        for ty, default in (("whistle", True), ("click", False)):
+            ui.checkbox(TYPE_NAMES[ty], value=saver.get(f"data.use_{ty}s", default),
+                        on_change=lambda e, ty=ty: (saver.set(f"data.use_{ty}s", e.value), body.refresh()))
+
+    @ui.refreshable
+    def body():
+        d = saver.project.config()["data"]
+        types = [t for t, dflt in (("whistle", True), ("click", False)) if d.get(f"use_{t}s", dflt)]
+        if not types:
+            ui.label("Choose at least one detection type.").classes("text-amber-700")
+        for ty in types:
+            ui.label(TYPE_NAMES[ty]).classes("text-base font-medium mt-2")
+            key = f"data.{ty}_source"
+            ui.select({"binaries": "PAMGuard binaries + annotations CSV (below)",
+                       "frames": "Frames CSV made with notebook 01"}, value=d.get(f"{ty}_source", "binaries"),
+                      label="Source", on_change=lambda e, key=key: (saver.set(key, e.value), body.refresh())
+                      ).classes("w-96")
+            if d.get(f"{ty}_source", "binaries") == "frames":
+                path_row(saver, f"data.{ty}_frames_csv", "Frames CSV", "file", (".csv",))
+                path_row(saver, f"data.{ty}_frames_params", "Frame parameters JSON", "file", (".json",))
+        if any(d.get(f"{t}_source", "binaries") == "binaries" for t in types):
+            ui.label("Binaries and labelled periods").classes("text-base font-medium mt-2")
+            path_row(saver, "data.binary_folder", "Folder of binary files (whistles and clicks)", "dir")
+            path_row(saver, "data.annotations", "Annotations CSV", "file", (".csv",))
+            from .widgets import field
+            field(saver, {"key": "data.sample_rate", "label": "Sample rate (Hz)", "kind": "number", "optional": True,
+                          "help": "blank = work it out from the binaries"})
+    body()
+
+
+def dl_new_data_inputs(saver):
+    ui.select({"binaries": "PAMGuard binaries (folder)", "frames": "Frames CSV per type"},
+              value=saver.get("new_data.source", "binaries"), label="Source",
+              on_change=lambda e: (saver.set("new_data.source", e.value), inputs.refresh())).classes("w-80")
+
+    @ui.refreshable
+    def inputs():
+        d = saver.project.config()["data"]
+        if saver.get("new_data.source", "binaries") == "frames":
+            for ty, dflt in (("whistle", True), ("click", False)):
+                if d.get(f"use_{ty}s", dflt):
+                    path_row(saver, f"new_data.{ty}_frames_csv", f"{TYPE_NAMES[ty]}: frames CSV", "file", (".csv",))
+        else:
+            path_row(saver, "new_data.binary_folder", "Folder of binary files", "dir")
+    inputs()

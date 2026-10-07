@@ -131,7 +131,8 @@ def test_delphinid_frames_and_colab_roundtrip(tmp_path):
         z.writestr("delphinID_example.zip", b"model")
         z.writestr("cv_predictions.csv", "detection_id,event_id,classifier,voc_type,class,probability\n")
     msgs = colab.import_results(p.folder, res)
-    assert len(msgs) == 2 and p.stage_states() == {"frames": "done", "crossval": "done", "model": "done"}
+    assert len(msgs) == 2 and p.stage_states() == {"frames": "done", "crossval": "done", "model": "done",
+                                                   "final": "skipped", "apply": "skipped"}
     p.update_config({"settings": {"training": {"epochs": 11}}})       # settings changed after training
     assert p.stage_states()["model"] == "outdated"
 
