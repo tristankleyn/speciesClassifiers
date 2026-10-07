@@ -13,6 +13,20 @@ Build a call-type library from whistle contours and classify new recordings with
 6. **Library**: `build_library` freezes everything into JSON ([format](data_formats.md#call-type-library-json)); `self_check` re-assigns the training windows to confirm it.
 7. **Classify**: `classify_contours(whistles, library)` → windows and decision blocks; `standard_output` turns windows into the standard classifier output (probability = the cluster's shrunk share of each label), e.g. for transfer learning.
 
+## Labels from periods, multi-class layers and pathways
+- **Labelled periods** (`event_id, start, end` + label columns such as `species`): each window takes the labels of the period it falls in; no call types needed. Without call types, the cluster feature weights are learned from the label being classified.
+- **Multi-class layers** (`multiclass.py`): every cluster gets a probability for each class (counts capped per event, classes balanced, shrunk towards the overall rate) and a verdict when one class is reliably above its overall rate on at least `min_label_days` events (or days). Tested by leaving out one event (or day) at a time; a block's class probabilities are the average of its windows'; the block is decided if its score p1 × (p1 − p2) reaches the layer's minimum score.
+- **Pathways** (`pathway.py`): a tree of layers, e.g. layer 1 decides a group (values grouped into classes), and a next layer within a group decides among that group's values, clustered afresh on that group's windows. New data goes down the tree; a block's `decision` is the deepest confident decision and `path` shows the route (e.g. `A > Dd`). Libraries store the tree, and `standalone.py` follows it.
+
+```python
+tree = {"name": "group", "column": "species", "groups": {"A": ["Dd", "Sco"], "B": ["pilot", "Gg"]},
+        "children": {"A": {"name": "species_A", "column": "species"}}}
+pr = discover_pathway(pool, tree, DiscoverParams(), ReliabilityParams(unit="event_id"))
+lib = build_pathway_library(pr, contour_params, window_params, min_scores={"group": 0.05})
+```
+
+The yes/no tasks with majority-vote blocks (as in the killer whale example) remain available.
+
 ## Assigning new windows
 A window goes to the cluster with the nearest centroid (weighted cosine distance), unless that distance exceeds `cosine_threshold` or its Euclidean distance to the cluster's nearest member exceeds the cluster's outlier threshold: then it is unassigned (`-1`, prediction `uncertain`). It takes its cluster's verdict for each task.
 

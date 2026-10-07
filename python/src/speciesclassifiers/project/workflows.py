@@ -179,9 +179,9 @@ def ct_defaults():
     cp = ContourParams().to_dict()
     return {
         "data": {"source": "binaries", "path": ""},
-        "labels": {"source": "csv", "path": "", "table_paths": [], "table_label_col": "Annotation",
+        "labels": {"source": "periods", "path": "", "table_paths": [], "table_label_col": "Annotation",
                    "table_keep_cols": [], "other_labels": None, "tasks": [], "requires": {},
-                   "include_unannotated_days": True},
+                   "include_unannotated_days": True, "pathway": None},
         "settings": {
             "contours": cp,
             "windows": {"window_s": 4.0, "overlap": 0.5, "assign_by": "overlap", "min_contours": 2,
@@ -201,10 +201,9 @@ def ct_example():
     c = str(EXAMPLES / "contours_example_synthetic.json.gz")
     return {"data": {"source": "json", "path": c},
             "labels": {"source": "csv", "path": str(EXAMPLES / "call_annotations_example_synthetic.csv"),
-                       "other_labels": ["species", "ecotype"],
-                       "tasks": [{"name": "species", "column": "species", "positive": "X", "negative": "Y"},
-                                 {"name": "ecotype", "column": "ecotype", "positive": "E1", "negative": "E2"}],
-                       "requires": {"ecotype": ["species", "X"]}},
+                       "other_labels": ["species", "ecotype"], "tasks": [], "requires": {},
+                       "pathway": {"name": "species", "column": "species",
+                                   "children": {"X": {"name": "ecotype", "column": "ecotype", "exclude": ["n/a"]}}}},
             "settings": {"discover": {"min_cluster_size": 10}},
             "decision": {"block_minutes": 5,
                          "rules": [{"if": "block_meanfreq_range_hz", "op": "<", "value": 200, "then": "noise"}]},
@@ -333,7 +332,11 @@ def ct_discover(p, cfg):
     print(f"Clustering {len(pool)} windows...")
     tasks = ct_tasks(cfg)
     rp = ReliabilityParams(**{**cfg["settings"]["reliability"], "block_minutes": cfg["decision"]["block_minutes"]})
-    r = discover(pool, DiscoverParams(**cfg["settings"]["discover"]), tasks, rp)
+    dp = DiscoverParams(**cfg["settings"]["discover"])
+    tree = cfg["labels"].get("pathway")
+    if tree:
+        return ct_discover_pathway(p, pool, tree, dp, rp)
+    r = discover(pool, dp, tasks, rp)
     out = p.stage_dir("discover")
     _save_pickle(r, out / "discover.pkl")
     for name, m in r.get("multiclass", {}).items():      # held-out predictions, for the app's curves
@@ -347,8 +350,37 @@ def ct_discover(p, cfg):
     print(f"{r['scorecard']['n_clusters']} clusters, {r['scorecard']['frac_unassigned']:.0%} of windows unassigned")
 
 
+def ct_discover_pathway(p, pool, tree, dp, rp):
+    from speciesclassifiers.calltypes.pathway import check_pathway, discover_pathway, iter_results, layer_summaries
+    problems = check_pathway(tree)
+    if problems:
+        raise ValueError("Pathway: " + " ".join(problems))
+    pr = discover_pathway(pool, tree, dp, rp)
+    out = p.stage_dir("discover")
+    for old in list(out.glob("heldout_*")) + list(out.glob("clusters_*.csv")):
+        old.unlink()
+    _save_pickle(pr, out / "pathway.pkl")
+    layers = layer_summaries(pr)
+    layers.to_csv(out / "layers.csv", index=False)
+    for r in iter_results(pr):
+        name = r["node"]["name"]
+        res = r["result"]
+        res["summary"].to_csv(out / f"clusters_{name}.csv", index=False)
+        m = res["multiclass"][name]
+        if len(m.get("window_preds", [])):
+            m["window_preds"].to_csv(out / f"heldout_{name}.csv", index=False)
+            _write_json({"classes": m["classes"], "unit": m["unit"], "base": m["base"], "path": r["path"],
+                         "column": r["node"]["column"]}, out / f"heldout_{name}.json")
+    _write_json({"pathway": True, "layers": layers["layer"].tolist(),
+                 "n_clusters": {r["node"]["name"]: r["result"]["scorecard"]["n_clusters"] for r in iter_results(pr)}},
+                out / "scorecard.json")
+    print(layers.to_string(index=False))
+
+
 def ct_library(p, cfg):
     from speciesclassifiers.calltypes import ContourParams, build_library, save_library, self_check
+    if cfg["labels"].get("pathway"):
+        return ct_library_pathway(p, cfg)
     r = load_pickle(p.folder / "discover" / "discover.pkl")
     lib = build_library(r, ContourParams(**cfg["settings"]["contours"]), ct_window_params(cfg), ct_tasks(cfg),
                         block_minutes=cfg["decision"]["block_minutes"], rules=cfg["decision"].get("rules") or None,
@@ -366,12 +398,46 @@ def ct_library(p, cfg):
           "re-assigned to their own cluster")
 
 
+def ct_library_pathway(p, cfg):
+    import shutil
+
+    from speciesclassifiers.calltypes import ContourParams, save_library, standalone
+    from speciesclassifiers.calltypes.pathway import build_pathway_library
+    pr = load_pickle(p.folder / "discover" / "pathway.pkl")
+    lib = build_pathway_library(pr, ContourParams(**cfg["settings"]["contours"]), ct_window_params(cfg),
+                                block_minutes=cfg["decision"]["block_minutes"],
+                                rules=cfg["decision"].get("rules") or None, name=cfg.get("name", "calltypes"),
+                                min_scores=cfg["decision"].get("min_scores") or {})
+    out = p.stage_dir("library")
+    save_library(lib, out / "library.json")
+    shutil.copy(standalone.__file__, out / "standalone.py")
+    for f in ("self_check.json",):
+        (out / f).unlink(missing_ok=True)
+    n = sum(1 for _ in _lib_nodes(lib))
+    print(f"Pathway library: {n} layer(s)")
+
+
+def _lib_nodes(lib):
+    yield lib
+    for c in (lib.get("children") or {}).values():
+        yield from _lib_nodes(c)
+
+
 def ct_apply(p, cfg):
     from speciesclassifiers.calltypes import classify_contours, load_library, standard_output
     lib = load_library(p.folder / "library" / "library.json")
     n = cfg["new_data"]
     wh = load_whistles(n["source"], n["path"], n.get("start", ""), n.get("end", ""))
     print(f"Classifying {len(wh)} contours...")
+    if lib.get("layer"):
+        from speciesclassifiers.calltypes.pathway import classify_contours_pathway
+        w, blocks, _ = classify_contours_pathway(wh, lib)
+        out = p.stage_dir("apply")
+        w.drop(columns=[x for x in w.columns if x.startswith("prof_")]).to_csv(out / "windows.csv", index=False)
+        blocks.to_csv(out / "blocks.csv", index=False)
+        (out / "window_predictions_standard.csv").unlink(missing_ok=True)
+        print(f"{len(w)} windows -> {len(blocks)} decision blocks")
+        return
     w, blocks, _ = classify_contours(wh, lib)
     out = p.stage_dir("apply")
     w.drop(columns=[x for x in w.columns if x.startswith("prof_")]).to_csv(out / "windows.csv", index=False)
@@ -391,7 +457,8 @@ CALLTYPES = Workflow(
             "labels.table_keep_cols", "labels.other_labels", "settings.windows"]),
      Stage("evaluate", "Evaluate labelled call types", ct_evaluate, ["settings.evaluate"]),
      Stage("discover", "Discover (cluster + verdicts)", ct_discover,
-           ["labels.tasks", "labels.include_unannotated_days", "settings.discover", "settings.reliability",
+           ["labels.tasks", "labels.pathway", "labels.include_unannotated_days", "settings.discover",
+            "settings.reliability",
             "decision.block_minutes"],
            after="windows"),
      Stage("library", "Build library", ct_library, ["decision", "labels.requires"]),

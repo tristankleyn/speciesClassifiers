@@ -27,10 +27,10 @@ A project runs as a series of stages (e.g. read detections → cross-validation 
 
 ## Screens
 1. **Data**: where your detections are (ROCCA contour stats / a feature table; PAMGuard binaries with an annotations CSV, or frames from notebook 01, for delphinID; PAMGuard whistle binaries / a contours JSON for call types). **Check** reads them and reports counts, date ranges and problems before you run anything.
-2. **Labels** (call types): call annotations (CSV or annotation tables), and the yes/no label tasks clusters are judged on (e.g. species X or Y; ecotype only when species is X).
+2. **Labels** (call types): labelled periods (events) or call annotations, and the **classification**: one or more layers, each deciding a label (every value a class, or values grouped into classes), with optional next layers within a class or group (e.g. group, then species within the group). Testing leaves out one event (or day) at a time.
 3. **Settings**: the main settings with short explanations; less common ones under *Advanced*.
 4. **Run**: stages, progress bar, log.
-5. **Results**: cross-validated accuracy, confusion matrices, clusters and their verdicts. Random forest: sliders for the decision thresholds with the threshold curve. Call types: block length and decision rules.
+5. **Results**: cross-validated accuracy, confusion matrices, clusters and their verdicts. Random forest: sliders for the decision thresholds with the threshold curve. Call types: per layer, block and event accuracy with a threshold slider and curve, and the layer's clusters; block length and decision rules.
 6. **Classify new data · export**: apply the classifier to new data (group decisions, or a presence timeline of decision blocks) and find the outputs: the model, the call-type library and `standalone.py`, predictions in the standard format.
 
 ## delphinID and TensorFlow

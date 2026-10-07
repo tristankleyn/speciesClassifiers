@@ -340,20 +340,62 @@ def blocks_from_windows(windows, contours, lib, period=None):
     return [{**{k: r[k] for k in first}, **{k: v for k, v in r.items() if k not in first}} for r in blocks]
 
 
-def classify(raw_contours, lib, period=None):
-    """Contours -> (windows, blocks), as lists of dicts. See the module docstring."""
-    contours = prepare_contours(raw_contours, lib["contour_params"])
-    feats = window_features(make_windows(contours, lib["window_params"]), contours, lib["window_params"],
-                            lib["agg_params"])
-    ids, dcos, deuc = assign(transform(feats, lib), lib)
+def classify_windows(feats, lib):
+    """Copies of the window feature dicts with this library's cluster, verdicts and class probabilities."""
+    out = [dict(f) for f in feats]
+    ids, dcos, deuc = assign(transform(out, lib), lib)
     byid = {c["id"]: c for c in lib["clusters"]}
-    for f, i, dc, de in zip(feats, ids, dcos, deuc):
+    for f, i, dc, de in zip(out, ids, dcos, deuc):
         f["cluster"], f["cos_dist"], f["euc_dist"] = int(i), dc, de
         for t in lib["tasks"]:
             f[f"{t['name']}_pred"] = byid[int(i)]["verdicts"][t["name"]]["verdict"] if i >= 0 else "uncertain"
             for c in t.get("classes") or []:
                 f[f"{t['name']}_p_{c}"] = byid[int(i)]["verdicts"][t["name"]]["probs"][c] if i >= 0 else np.nan
-    return feats, blocks_from_windows(feats, contours, lib, period)
+    return out
+
+
+def pathway_blocks(feats, contours, lib, period=None):
+    """Blocks through a pathway library (``children``): each layer's decision and score, ``path`` and
+    ``decision`` (the deepest confident decision). A plain library gives its usual blocks."""
+    wins = classify_windows(feats, lib)
+    blocks = blocks_from_windows(wins, contours, lib, period)
+    layer = (lib.get("layer") or {}).get("name")
+    if not layer:
+        return wins, blocks
+    blk = int(round(lib["block_minutes"] * 60 * NS))
+    for b in blocks:
+        b["decision"] = b[layer]
+        b["path"] = b[layer] if b[layer] not in ("uncertain", "no_detections") else ""
+    for g, child in (lib.get("children") or {}).items():
+        keys = {int(round(b["block_start"] * NS)) for b in blocks if b[layer] == g}
+        if not keys:
+            continue
+        sub = [f for f in feats if (int(np.round(f["w_start"] * 1e9)) // blk) * blk in keys]
+        _, cblocks = pathway_blocks(sub, contours, child)
+        by = {int(round(c["block_start"] * NS)): c for c in cblocks}
+        for b in blocks:
+            c = by.get(int(round(b["block_start"] * NS)))
+            if b[layer] != g or c is None:
+                continue
+            for k, v in c.items():
+                if k in ("decision", "path") or k not in b:
+                    if k == "decision":
+                        if v not in ("uncertain", "no_detections", None):
+                            b["decision"] = v
+                    elif k == "path":
+                        if v:
+                            b["path"] = f"{g} > {v}"
+                    else:
+                        b[k] = v
+    return wins, blocks
+
+
+def classify(raw_contours, lib, period=None):
+    """Contours -> (windows, blocks), as lists of dicts. See the module docstring."""
+    contours = prepare_contours(raw_contours, lib["contour_params"])
+    feats = window_features(make_windows(contours, lib["window_params"]), contours, lib["window_params"],
+                            lib["agg_params"])
+    return pathway_blocks(feats, contours, lib, period)
 
 
 def write_csv(rows, path, drop=("contour_idx",)):

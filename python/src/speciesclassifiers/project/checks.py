@@ -171,7 +171,8 @@ def check_contours(source, path):
 
 
 def check_annotations(lab):
-    """Call annotations (CSV or annotation tables): counts per call type and day, other label columns."""
+    """Call annotations (CSV or annotation tables) or labelled periods: counts per label and day/event, and
+    the label columns with their values (for building the classification)."""
     from .workflows import load_calls, other_label_columns
     r = _result()
     try:
@@ -179,19 +180,38 @@ def check_annotations(lab):
     except Exception as e:
         return _err(r, f"Couldn't read the annotations: {e}")
     if not len(calls):
-        return _err(r, "No annotated calls found.")
+        return _err(r, "No annotations found.")
     days = pd.to_datetime(calls["start"], unit="s", utc=True).dt.strftime("%Y-%m-%d")
     others = other_label_columns(calls, {**lab, "other_labels": None})
-    r["messages"].append(("ok", f"{len(calls)} calls, {calls['label'].nunique()} labels, on {days.nunique()} days."))
+    periods = lab.get("source") == "periods"
+    if periods:
+        hours = ((calls["end"] - calls["start"]) / 3600).sum()
+        r["messages"].append(("ok", f"{len(calls)} labelled periods ({hours:.1f} h), {calls['event_id'].nunique()} "
+                                    f"events, on {days.nunique()} days."))
+        if not others:
+            return _err(r, "No label columns found (besides event_id, start, end).")
+        main = others[0]
+        t = calls.groupby(calls[main].astype(str)).agg(events=("event_id", "nunique"), periods=("event_id", "size"))
+        t["hours"] = (calls.assign(h=(calls["end"] - calls["start"]) / 3600).groupby(calls[main].astype(str))["h"]
+                      .sum().round(2))
+        r["table"] = t.reset_index()
+        few = t[t["events"] < 2].index.tolist()
+        if few:
+            r["messages"].append(("warn", f"Only one event for: {', '.join(few)}. A cluster needs a label from at "
+                                          "least 2 events (setting) before it can indicate it."))
+    else:
+        r["messages"].append(("ok", f"{len(calls)} calls, {calls['label'].nunique()} labels, on {days.nunique()} days."))
+        if days.nunique() < 2:
+            r["messages"].append(("warn", "Annotations from only one day: verdicts need labels from at least "
+                                          "'min_label_days' days or events."))
+        r["table"] = pd.crosstab(calls["label"], days).reset_index()
     if others:
-        r["messages"].append(("ok", "Other label columns: " + ", ".join(
-            f"{c} ({', '.join(map(str, calls[c].dropna().unique()[:6]))})" for c in others)))
-    if days.nunique() < 2:
-        r["messages"].append(("warn", "Annotations from only one day: verdicts need labels from at least "
-                                      "'min_label_days' days, and testing is by day."))
-    r["table"] = pd.crosstab(calls["label"], days).reset_index()
-    r["info"] = {"other_labels": others, "values": {c: sorted(map(str, calls[c].dropna().unique())) for c in others},
-                 "labels": sorted(calls["label"].astype(str).unique())}
+        r["messages"].append(("ok", "Label columns: " + ", ".join(
+            f"{c} ({', '.join(map(str, calls[c].dropna().unique()[:8]))})" for c in others)))
+    cols = others + ([] if periods else ["label"])
+    r["info"] = {"other_labels": others, "columns": cols,
+                 "values": {c: sorted(map(str, calls[c].dropna().unique())) for c in cols},
+                 "labels": sorted(calls["label"].astype(str).unique()) if "label" in calls else []}
     return r
 
 

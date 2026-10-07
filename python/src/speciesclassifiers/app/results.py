@@ -196,7 +196,7 @@ async def ct_results(p, saver):
     if ev is None:
         ui.label("Not run yet.").classes("text-gray-600")
     elif "note" in ev:
-        ui.label(ev["note"]).classes("text-amber-700")
+        ui.label(ev["note"] + " (Not needed when classifying from labelled periods.)").classes("text-gray-600")
     else:
         with ui.row().classes("gap-3 items-start"):
             metric("Balanced accuracy", ev.get("rf_bal_acc"))
@@ -212,11 +212,22 @@ async def ct_results(p, saver):
                 plot_confusion(conf, "Call types (rows: true)", ax=ax)
                 return fig
 
-    ui.markdown("#### Discovered clusters\nWindows grouped by shape. A cluster's verdict for a label task is "
-                "given only when it is reliably one label, on enough days.")
+    layered = list((p.folder / "discover").glob("heldout_*.json"))
+    if not layered:
+        ui.markdown("#### Discovered clusters\nWindows grouped by shape. A cluster's verdict for a label task is "
+                    "given only when it is reliably one label, on enough days.")
     if not_ready(p, "discover", "clusters"):
         if conf_slot:
             await conf_slot.fill(draw_conf)
+        return
+    if layered:
+        if conf_slot:
+            await conf_slot.fill(draw_conf)
+        await layers_results(p, saver)
+        ui.markdown("#### Decisions\nNew data is decided per clock-aligned block. Optional **rules** then override "
+                    "a block's decision, e.g. mark blocks whose contours barely vary in frequency as noise. Changes "
+                    "apply after the next Run (library + new data).")
+        decision_editor(saver)
         return
     sc = read_json(p.folder / "discover" / "scorecard.json", {})
     tasks = saver.get("labels.tasks", []) or []
@@ -299,6 +310,11 @@ def decision_editor(saver):
     ui.button("Add rule", icon="add", on_click=add).props("outline dense")
 
 
+def _layer_names(p):
+    f = p.folder / "discover" / "layers.csv"
+    return list(pd.read_csv(f)["layer"]) if f.is_file() else []
+
+
 def timeline_fig(blocks, task, block_minutes):
     """Days (rows) × time of day: one bar per block, coloured by the task's decision."""
     from matplotlib.patches import Rectangle
@@ -346,7 +362,10 @@ async def ct_apply(p, saver, start_run):
         if st["apply"] == "outdated":
             ui.label("Settings changed since: classify again to update.").classes("text-amber-700")
         blocks = _csv(bl)
-        tasks = [t["name"] for t in saver.get("labels.tasks", []) or [] if t["name"] in blocks]
+        if "decision" in blocks:        # pathway: the final decision, then each layer
+            tasks = ["decision"] + [c for c in _layer_names(p) if c in blocks]
+        else:
+            tasks = [t["name"] for t in saver.get("labels.tasks", []) or [] if t["name"] in blocks]
         if tasks and len(blocks):
             ui.markdown("#### Presence over time")
             sel = ui.select(tasks, value=tasks[0], label="Show").classes("w-48")
@@ -530,3 +549,113 @@ def _zip_info(path):
             return json.loads(z.read(name))
     except Exception:
         return None
+
+
+# ============================================================================ call-type layers ======
+def _layer_data(p, name, block_minutes, min_score):
+    """Held-out rows and performance of one layer (cached per file version and threshold)."""
+    import json
+
+    from speciesclassifiers.calltypes import multiclass as mc
+    f = p.folder / "discover" / f"heldout_{name}.csv"
+    meta = json.loads((p.folder / "discover" / f"heldout_{name}.json").read_text())
+    key = ("layer", str(f), f.stat().st_mtime, block_minutes)
+    if key not in _CACHE:
+        wp = pd.read_csv(f, dtype={"unit": str, "true": str, "day": str})
+        cl = meta["classes"]
+        blocks = mc.aggregate(wp, cl, "block", block_minutes)
+        units = mc.aggregate(wp, cl, "unit")
+        _CACHE[key] = (meta, blocks, units, mc.threshold_curve(blocks, cl, np.linspace(0, 0.5, 51)),
+                       mc.threshold_curve(units, cl, np.linspace(0, 0.5, 51)))
+    meta, blocks, units, bcurve, ucurve = _CACHE[key]
+    cl = meta["classes"]
+    return meta, mc.performance(blocks, cl, min_score), mc.performance(units, cl, min_score), bcurve, ucurve
+
+
+async def layer_section(p, saver, name, block_minutes):
+    import json
+    meta = json.loads((p.folder / "discover" / f"heldout_{name}.json").read_text())
+    within = " > ".join(meta.get("path") or [])
+    unit = "event" if meta.get("unit") == "event_id" else meta.get("unit", "day")
+    with ui.card().classes("w-full p-4").props("flat bordered"):
+        ui.label(f"Layer: {name}" + (f"  ·  within {within}" if within else "")).classes("text-lg font-medium")
+        ui.label(f"Classes: {', '.join(meta['classes'])}. Tested by leaving out one {unit} at a time; blocks are "
+                 f"{block_minutes} min.").classes("text-sm text-gray-600")
+        cur = float((saver.get("decision.min_scores") or {}).get(name, 0.0))
+        with ui.row().classes("items-center gap-4 w-full"):
+            ui.label("Minimum block score").classes("text-sm")
+            sl = ui.slider(min=0, max=0.5, step=0.01, value=cur).props("label-always").classes("w-80 mt-6")
+            ui.label("blocks below are 'uncertain' (score = top probability × its lead over the second)").classes(
+                "text-xs text-gray-500")
+        box = ui.column().classes("w-full")
+
+        def draw_curve(curve, t, title):
+            fig, ax = new_fig(4.6, 3.2)
+            ax.plot(curve["threshold"], curve["accuracy"], label="accuracy when decided")
+            ax.plot(curve["threshold"], curve["balanced_accuracy"], label="balanced accuracy")
+            ax.plot(curve["threshold"], curve["coverage"], "--", label="decided")
+            ax.axvline(t, color="k", lw=0.8)
+            ax.set(xlabel="Minimum score", ylim=(0, 1.05), title=title)
+            ax.legend(fontsize=7)
+            return fig
+
+        def draw_conf(conf, title):
+            from speciesclassifiers.plots import plot_confusion
+            n = max(len(conf.index), len(conf.columns))
+            fig, ax = new_fig(1.2 + 0.75 * n, 1.0 + 0.65 * n)
+            plot_confusion(conf, title, ax=ax)
+            return fig
+
+        async def show():
+            t = float(sl.value)
+            ms = dict(saver.get("decision.min_scores") or {})
+            if float(ms.get(name, 0.0)) != t:
+                ms[name] = t
+                saver.set("decision.min_scores", ms)
+            m, bp, up, bc, uc = await run.io_bound(_layer_data, p, name, block_minutes, t)
+            box.clear()
+            with box:
+                with ui.row().classes("gap-3"):
+                    metric("Blocks decided", bp["coverage"])
+                    metric("Block accuracy", bp["accuracy"], hint="of blocks decided")
+                    metric("Balanced (blocks)", bp["balanced_accuracy"])
+                    metric(f"{unit.capitalize()}s decided", up["coverage"])
+                    metric(f"{unit.capitalize()} accuracy", up["accuracy"], hint=f"of {unit}s decided")
+                rec = pd.DataFrame({"class": list(bp["recall"]),
+                                    "blocks: share correct": [bp["recall"][c] for c in bp["recall"]],
+                                    f"{unit}s: share correct": [up["recall"].get(c) for c in bp["recall"]]})
+                with ui.row().classes("gap-4 items-start w-full"):
+                    s1, s2 = ImageSlot("w-[24rem]"), ImageSlot("w-[22rem]")
+                    with ui.column().classes("min-w-64"):
+                        table(rec, rows=12)
+            await s1.fill(lambda: draw_curve(bc, t, "Blocks: threshold curve"))
+            await s2.fill(lambda: draw_conf(bp["confusion"], "Blocks (rows: true)"))
+        sl.on("change", show)
+        await show()
+        cf = p.folder / "discover" / f"clusters_{name}.csv"
+        if not cf.is_file():
+            cf = p.folder / "discover" / "clusters.csv"
+        cl = _csv(cf)
+        if cl is not None:
+            with ui.expansion("Clusters of this layer", icon="hub").classes("w-full"):
+                pc = [f"{name}_p_{c}" for c in meta["classes"] if f"{name}_p_{c}" in cl]
+                cols = ["cluster", "n", "n_days", f"{name}_verdict"] + pc
+                t = cl[[c for c in cols if c in cl]].rename(columns={f"{name}_verdict": "verdict",
+                                                                      **{c: c.replace(f"{name}_p_", "p ") for c in pc}})
+                table(t, rows=15)
+
+
+async def layers_results(p, saver):
+    import json
+    lib_bm = saver.get("decision.block_minutes", 10)
+    layers_csv = p.folder / "discover" / "layers.csv"
+    names = list(pd.read_csv(layers_csv)["layer"]) if layers_csv.is_file() else \
+        [f.stem[len("heldout_"):] for f in sorted((p.folder / "discover").glob("heldout_*.json"))]
+    ui.markdown("#### Classification layers\nEach layer's clusters are judged on held-out data: windows from the "
+                "left-out event get the class probabilities of their clusters (computed without that event); a "
+                "block's probabilities are the average of its windows'. Raise a layer's threshold to leave unsure "
+                "blocks undecided. Thresholds apply to new data after the next Run (library + new data).")
+    for name in names:
+        if (p.folder / "discover" / f"heldout_{name}.json").is_file():
+            await layer_section(p, saver, name, json.loads(
+                (p.folder / "discover" / f"heldout_{name}.json").read_text()).get("block_minutes", lib_bm))

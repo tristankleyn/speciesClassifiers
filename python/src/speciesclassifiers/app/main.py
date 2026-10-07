@@ -463,15 +463,17 @@ def data_panel(p, saver, kind):
 
 
 def labels_panel(p, saver):
-    ui.markdown("#### Call annotations\nOne row per annotated call: `event_id, label, start, end` (UTC) plus "
-                "any other label columns (e.g. `species`, `ecotype`). Calls of no particular type can be labelled "
-                "`untyped`. Or use annotation tables (one per recording/day; text or Excel), converted for you.")
-    ui.select({"csv": "Annotations CSV", "tables": "Annotation tables"}, value=saver.get("labels.source"),
+    ui.markdown("#### Annotations\nEither **labelled periods** (events): one row per period with `event_id, start, end` "
+                "(UTC) and label columns such as `species`; no call types needed. Or **call annotations**: one row "
+                "per call with `event_id, label` (call type, or `untyped`), `start, end`, plus optional label columns; "
+                "or annotation tables (one per recording/day; text or Excel), converted for you.")
+    ui.select({"periods": "Labelled periods (events) CSV", "csv": "Call annotations CSV",
+               "tables": "Annotation tables"}, value=saver.get("labels.source"),
               label="Source", on_change=lambda e: (saver.set("labels.source", e.value), src.refresh())).classes("w-96")
 
     @ui.refreshable
     def src():
-        if saver.get("labels.source") == "csv":
+        if saver.get("labels.source") in ("csv", "periods"):
             path_row(saver, "labels.path", "Annotations CSV", "file", (".csv",))
         else:
             field(saver, {"key": "labels.table_paths", "label": "Annotation table files", "kind": "list",
@@ -479,24 +481,42 @@ def labels_panel(p, saver):
             field(saver, {"key": "labels.table_label_col", "label": "Label column", "kind": "text"})
             field(saver, {"key": "labels.table_keep_cols", "label": "Other label columns to keep", "kind": "list"})
     src()
-    info = {"other_labels": [], "values": {}}
+    info = {"other_labels": [], "values": {}, "columns": []}
 
-    async def check():
+    async def check(quiet=False):
         out.clear()
         with out:
             ui.spinner()
         r = await run.io_bound(checks.check_annotations, saver.project.config()["labels"])
         show_check(out, r)
         info.update(r.get("info") or {})
+        editor.refresh()
         tasks_ui.refresh()
     ui.button("Check annotations", icon="fact_check", on_click=check)
     out = ui.column().classes("w-full")
-    tasks_box = ui.column().classes("w-full")
+
+    ui.markdown("#### Classification\nWhat should the clusters tell apart? Add a layer for the label you care about "
+                "(e.g. `species`): each value becomes a class, or group values into classes. Add a next layer within "
+                "a class or group to decide further (e.g. the species within a group).")
+    from .pathway_ui import pathway_editor
+    editor = pathway_editor(saver, info)
+    with ui.row().classes("items-end gap-6 mt-2"):
+        field(saver, {"key": "settings.reliability.unit", "label": "Test by leaving out one", "kind": "select",
+                      "options": {"event_id": "event at a time", "day": "day at a time"}})
+        field(saver, {"key": "settings.reliability.min_label_days", "label": "Events (or days) a cluster's label "
+                      "must come from", "kind": "int", "min": 1})
+    field(saver, {"key": "labels.include_unannotated_days", "label": "Also cluster windows from days without "
+                  "annotations", "kind": "switch"})
+    if saver.get("labels.path") or saver.get("labels.table_paths"):
+        ui.timer(0.2, check, once=True)
+    tasks_box = ui.expansion("Yes/no label tasks (as in the killer whale example)", icon="rule",
+                             value=bool(saver.get("labels.tasks")) and not saver.get("labels.pathway")
+                             ).classes("w-full")
 
     with tasks_box:
-        ui.markdown("#### Label tasks\nEach task is a yes/no question every cluster of windows is judged on, e.g. "
-                    "*species: X or Y?* A cluster gets a verdict only if it's reliably one or the other, on enough "
-                    "days. Check the annotations first to fill the choices.")
+        ui.markdown("Each task is a yes/no question every cluster is judged on, e.g. *species: X or Y?*, decided "
+                    "per block by majority vote and tested by leaving out days. Used only when no classification "
+                    "layers are set up above.")
 
         @ui.refreshable
         def tasks_ui():
@@ -563,8 +583,6 @@ def labels_panel(p, saver):
             tasks_ui.refresh()
         tasks_ui()
         ui.button("Add label task", icon="add", on_click=add).props("outline")
-        field(saver, {"key": "labels.include_unannotated_days", "label": "Also cluster windows from days without "
-                      "annotations", "kind": "switch"})
 
 
 def settings_panel(saver, kind):
