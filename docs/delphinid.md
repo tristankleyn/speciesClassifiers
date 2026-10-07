@@ -32,3 +32,12 @@ In the app, data source **Whistles and/or clicks**: each ticked type gets its ow
 4. **New data**: frames from binaries (or frames CSVs) are predicted with each type's zip and each block is decided by the final forest (`apply/blocks.csv`).
 
 **Google Colab** (free GPU, nothing to install): on the Run screen, *Make Colab bundle* packs the project's frames and settings; notebook `02b_train_delphinID_types` runs the project's own cross-validation, final models and final layer from the bundle (`speciesclassifiers.project.colab.run_bundle`) and downloads a results zip; *Import results from Colab* puts them back into the project, where they count as done while the settings are unchanged. The GPU helps less than for large networks (the CNN is small): setting **Folds** (e.g. 10) cuts the number of models far more than leaving one event out at a time.
+
+## Advanced diagnostics
+Results → **Advanced diagnostics** opens a page over the held-out (cross-validation) frame predictions (`delphinid.diagnostics`). Each frame has its prediction's **confidence** (top probability) and **score** (top × lead over the second), its **detections** and whistle **density**, and values from its input spectrum: **peak frequency**, **lowest / highest frequency with energy** and the **span** between them (for clicks: bins in the upper half of the frame's dB range).
+
+- **Frame filters** (a range per measurement) leave frames out of frame accuracy and of their event's decision.
+- **Event filters** (minimum kept frames, minimum event score or confidence) leave events undecided.
+- The page shows frames kept and events decided, frame and event accuracy (kept / decided only), confusion matrices, per-class results, the events, and the distribution of any measurement for correct and wrong frames, with the filtered-out range greyed.
+
+Filters are saved with the project; they don't change the model. With several detection types, switch between them at the top.

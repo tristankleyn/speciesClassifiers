@@ -467,6 +467,13 @@ def _event_curve(ev, classes):
 
 async def dl_results(p, saver):
     from speciesclassifiers.plots import plot_confusion
+
+    from .diagnostics_page import diagnostics_link
+    if p.stage_states().get("crossval") in ("done", "outdated"):
+        with ui.row().classes("items-center gap-2"):
+            diagnostics_link(p)
+            ui.label("Filter frames (confidence, density, frequency...) and events, and see how accuracy "
+                     "changes.").classes("text-xs text-gray-500")
     if saver.get("data.source") == "multi":
         from .stacked import stacked_results
         return await stacked_results(p, saver, "A delphinID model per detection type on its frames, tested by "

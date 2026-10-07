@@ -89,3 +89,36 @@ def test_delphinid_multi_colab_roundtrip(tmp_path, monkeypatch):
     assert len(list((p.folder / "model").glob("*.zip"))) == 2
     assert run(p.folder, ["apply"]) == "finished"            # nothing retrained; new data classified
     assert "Final model + PAMGuard zip: up to date" in p.log_path.read_text()
+
+
+def test_delphinid_diagnostics():
+    """Frames joined to held-out predictions; filters change coverage and accuracy as expected."""
+    import json
+    from pathlib import Path
+
+    from speciesclassifiers.delphinid import AcousticParams
+    from speciesclassifiers.delphinid.diagnostics import apply_filters, bin_centres, frame_table, summary
+    ex = Path(__file__).resolve().parents[2] / "examples"
+    frames = pd.read_csv(ex / "frames_example_synthetic.csv")
+    meta = json.loads((ex / "frames_example_synthetic_params.json").read_text())
+    ap = AcousticParams(**{k: v for k, v in meta["acoustic_params"].items() if k in AcousticParams.__dataclass_fields__})
+    c = bin_centres(ap, meta["sample_rate"])
+    assert len(c) == ap.n_bins() and c[0] == 2100.0
+    rng = np.random.default_rng(0)
+    classes = ["SpA", "SpB", "SpC"]
+    rows = []
+    for _, f in frames.iterrows():
+        p = rng.dirichlet([1, 1, 1]) * 0.5 + 0.5 * (np.array(classes) == f["label"])
+        for cl, v in zip(classes, p):
+            rows.append({"detection_id": f"{f['event_id']}_{round(f['frame_start'], 3)}", "event_id": f["event_id"],
+                         "classifier": "d", "voc_type": "whistle", "class": cl, "probability": v,
+                         "true_class": f["label"]})
+    t = frame_table(frames, pd.DataFrame(rows), ap, meta["sample_rate"])
+    assert len(t) == len(frames) and t["peak_freq_hz"].notna().all() and set(t.attrs["classes"]) == set(classes)
+    s_all = summary(t, *apply_filters(t))
+    assert s_all["frames_kept"] == len(t) and s_all["events_decided"] == 18
+    k, ev = apply_filters(t, {"confidence": (0.7, None)}, {"min_frames": 10})
+    s = summary(t, k, ev)
+    assert s["frames_kept"] < len(t) and (k["confidence"] >= 0.7).all()
+    assert s["frame_accuracy"] >= s_all["frame_accuracy"] and s["events_decided"] < 18
+    assert s["frame_confusion"].to_numpy().sum() == s["frames_kept"]

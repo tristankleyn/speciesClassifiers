@@ -15,6 +15,7 @@ from speciesclassifiers.project import WORKFLOWS, Project, start_background
 from speciesclassifiers.project import checks
 from speciesclassifiers.project.workflows import EXAMPLES
 
+from . import diagnostics_page as _diagnostics  # noqa: F401  (registers /diagnostics)
 from . import results
 from .settings import SETTINGS, applies
 from .widgets import Saver, field, open_folder, path_row, pick_path, show_check
