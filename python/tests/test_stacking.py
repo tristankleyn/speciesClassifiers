@@ -140,9 +140,15 @@ def test_delphinid_classify_new_single(tmp_path):
     cfg["settings"].update({"training": {"epochs": 2}, "resampling": {"n_bootstraps": 1},
                             "crossval": {"run": False, "n_folds": 2}})
     cfg["new_data"] = {"source": "frames", "whistle_frames_csv": str(EXAMPLES / "frames_example_synthetic.csv"),
-                       "binary_folder": "", "block_minutes": 5}
+                       "binary_folder": ""}
     p = Project.create(tmp_path / "dl1", "delphinid", config=cfg)
     assert p.stage_states()["apply"] == "pending"
     assert run(p.folder) == "finished"
-    b = pd.read_csv(p.folder / "apply" / "blocks.csv")
-    assert len(b) >= 18 and {"decision", "n_frames", "p_SpA"} <= set(b.columns)      # events may span blocks
+    f = pd.read_csv(p.folder / "apply" / "frame_predictions.csv")         # every frame with all its values
+    assert len(f) == 457 and {"start_utc", "end_utc", "n_detections", "density", "peak_freq_hz", "p_SpA",
+                              "predicted", "confidence"} <= set(f.columns)
+    assert np.allclose(f["frame_end"] - f["frame_start"], 4.0)
+    b = dl_blocks(f, block_minutes=5)
+    assert len(b) >= 18 and {"decision", "n_frames", "p_SpA", "start_utc"} <= set(b.columns)
+    b2 = dl_blocks(f, block_minutes=5, min_density=0.8, min_detections=3)
+    assert b2["n_frames"].sum() == ((f["density"] >= 0.8) & (f["n_detections"] >= 3)).sum()

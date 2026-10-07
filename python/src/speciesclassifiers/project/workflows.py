@@ -1016,9 +1016,9 @@ def dl_defaults():
         "final": {"block_minutes": 10, "n_trees": 500, "node_size": 1},
         "decision": {"min_scores": {}},
         "new_data": {"source": "binaries", "binary_folder": "", "start": "", "end": "",
-                     "whistle_frames_csv": "", "click_frames_csv": "",
-                     # one detection type: frame probabilities averaged per block
-                     "block_minutes": 1, "min_frames": 1, "min_score": 0.0},
+                     "whistle_frames_csv": "", "click_frames_csv": ""},
+        # how new-data frames are grouped into blocks and filtered (chosen after classifying; no rerun)
+        "view": {"block_minutes": 1, "min_frames": 1, "min_score": 0.0, "min_density": 0.0, "min_detections": 1},
         "model_name": "delphinID_whistles",
     }
 
@@ -1293,14 +1293,53 @@ def dl_new_frames(n, cfg, voc_type, acoustic, sample_rate):
     return click_frames(det, acoustic, sr) if voc_type == "click" else whistle_frames(det, acoustic)
 
 
-def dl_blocks(frames, probs, classes, block_minutes=1, min_frames=1, min_score=0.0):
-    """Frame probabilities -> clock-aligned blocks: mean probability per class over the block's frames, the top
-    class, its score (top x lead over the second) and the decision ("uncertain" below ``min_score`` or with
-    fewer than ``min_frames`` frames)."""
+def dl_frame_predictions(frames, probs, classes, acoustic, sample_rate=None):
+    """New-data frame predictions, one row per frame with everything about it: start / end (Unix s and UTC),
+    detections (contours or clicks) in the frame, whistle density, spectrum values (peak, lowest and highest
+    frequency with energy, span), class probabilities, prediction, confidence and score."""
+    from speciesclassifiers.delphinid.crossval import feature_columns
+    from speciesclassifiers.delphinid.diagnostics import bin_centres, spectrum_measures
+    feats = feature_columns(frames)
+    P = np.asarray(probs, float)
+    srt = np.sort(P, axis=1)
+    t0 = frames["frame_start"].to_numpy(float)
+    t1 = t0 + float(acoustic.frame_len)
+    iso = lambda t: pd.to_datetime(t, unit="s", utc=True).strftime("%Y-%m-%dT%H:%M:%S.%f").str[:-3] + "Z"  # noqa: E731
+    out = pd.DataFrame({"frame_start": t0, "frame_end": t1, "start_utc": iso(t0), "end_utc": iso(t1),
+                        "day": frames["event_id"].astype(str).to_numpy()})
+    for c in ("n_detections", "density", "file"):
+        if c in frames:
+            out[c] = frames[c].to_numpy()
+    meas = spectrum_measures(frames[feats].to_numpy(float), bin_centres(acoustic, sample_rate, len(feats)),
+                             acoustic.voc_type)
+    out = pd.concat([out, meas.reset_index(drop=True)], axis=1)
+    for k, c in enumerate(classes):
+        out[f"p_{c}"] = P[:, k]
+    out["predicted"] = np.array(classes)[P.argmax(1)]
+    out["confidence"] = srt[:, -1]
+    out["score"] = srt[:, -1] * (srt[:, -1] - (srt[:, -2] if P.shape[1] > 1 else 0))
+    return out.sort_values("frame_start", kind="mergesort").reset_index(drop=True)
+
+
+def dl_blocks(frames, probs=None, classes=None, block_minutes=1, min_frames=1, min_score=0.0, min_density=None,
+              min_detections=None):
+    """Frames -> clock-aligned blocks: mean probability per class over the block's kept frames, the top class,
+    its score (top x lead over the second) and the decision ("uncertain" below ``min_score`` or with fewer
+    than ``min_frames`` kept frames). ``frames`` is a table from ``dl_frame_predictions`` (then ``probs`` and
+    ``classes`` come from its ``p_`` columns), or frames with ``probs``. Frames below ``min_density`` (whistle
+    density) or ``min_detections`` are left out first."""
     from speciesclassifiers.randomforest.model import decision_score
+    if probs is None:
+        classes = [c[2:] for c in frames.columns if c.startswith("p_")]
+        probs = frames[[f"p_{c}" for c in classes]].to_numpy(float)
+    keep = np.ones(len(frames), bool)
+    if min_density is not None and "density" in frames:
+        keep &= frames["density"].to_numpy(float) >= min_density
+    if min_detections is not None and "n_detections" in frames:
+        keep &= frames["n_detections"].to_numpy(float) >= min_detections
     blk = 60 * float(block_minutes)
-    b = np.floor(frames["frame_start"].to_numpy(float) / blk) * blk
-    P = pd.DataFrame(np.asarray(probs, float), columns=classes)
+    b = np.floor(frames["frame_start"].to_numpy(float)[keep] / blk) * blk
+    P = pd.DataFrame(np.asarray(probs, float)[keep], columns=classes)
     P["block_start"] = b
     g = P.groupby("block_start")
     out = g[classes].mean()
@@ -1308,15 +1347,17 @@ def dl_blocks(frames, probs, classes, block_minutes=1, min_frames=1, min_score=0
     out.insert(0, "block_end", out.index + blk)
     out = out.reset_index()
     M = out[classes].to_numpy()
-    out["predicted"] = np.array(classes)[M.argmax(1)]
-    out["score"] = decision_score(M)
+    out["predicted"] = np.array(classes)[M.argmax(1)] if len(out) else []
+    out["score"] = decision_score(M) if len(out) else []
     ok = (out["score"] >= min_score) & (out["n_frames"] >= min_frames)
     out["decision"] = np.where(ok, out["predicted"], "uncertain")
+    out.insert(2, "start_utc", pd.to_datetime(out["block_start"], unit="s", utc=True).dt.strftime("%Y-%m-%d %H:%M:%S"))
     return out.rename(columns={c: f"p_{c}" for c in classes})
 
 
 def dl_apply_single(p, cfg):
-    """New data with one detection type: the PAMGuard model predicts each frame; blocks average them."""
+    """New data with one detection type: the PAMGuard model predicts each frame (the training resolution);
+    blocks and frame filters are chosen afterwards on the Classify screen."""
     from speciesclassifiers.delphinid import load_pamguard_zip
     from speciesclassifiers.delphinid.crossval import feature_columns, to_standard_output
     from speciesclassifiers.delphinid.export import cleanup
@@ -1337,14 +1378,14 @@ def dl_apply_single(p, cfg):
         probs = fn(frames[feature_columns(frames)].to_numpy("float32"))
     finally:
         cleanup(fn)
+    dl_frame_predictions(frames, probs, classes, acoustic, sr).to_csv(out / "frame_predictions.csv", index=False)
     pr = to_standard_output(frames, probs, classes, cfg.get("model_name", "delphinID"), acoustic.voc_type)
     pr["start"] = pr["detection_id"].map(pd.Series(frames["frame_start"].to_numpy(float),
                                                      index=dl_frame_ids(frames))).to_numpy()
-    pr.to_csv(out / "frame_predictions.csv", index=False)
-    blocks = dl_blocks(frames, probs, classes, n.get("block_minutes", 1), n.get("min_frames", 1), n.get("min_score", 0.0))
-    blocks.to_csv(out / "blocks.csv", index=False)
-    print(f"{len(frames)} frames -> {len(blocks)} blocks of {n.get('block_minutes', 1)} min: " +
-          ", ".join(f"{k} {v}" for k, v in blocks["decision"].value_counts().items()))
+    pr.to_csv(out / "frame_predictions_standard.csv", index=False)
+    print(f"{len(frames)} frames of {acoustic.frame_len:g} s classified: " +
+          ", ".join(f"{k} {v}" for k, v in pd.Series(np.array(classes)[np.asarray(probs).argmax(1)])
+                    .value_counts().items()))
 
 
 def dl_apply(p, cfg):

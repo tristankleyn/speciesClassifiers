@@ -582,29 +582,29 @@ A click model only suits recordings at the sample rate it was trained on, becaus
             output_row(label, path, p.folder)
 
 
+def _frame_preds(path):
+    key = ("frame_preds", str(path), path.stat().st_mtime)
+    if key not in _CACHE:
+        _CACHE[key] = pd.read_csv(path)
+    return _CACHE[key]
+
+
 async def dl_classify_new(p, saver, start_run):
-    """One detection type: classify new binaries with the trained model, in clock-aligned blocks."""
+    """One detection type: classify new binaries frame by frame with the trained model; afterwards group the
+    frames into blocks and filter them on this screen (no rerun)."""
+    from speciesclassifiers.project.workflows import dl_blocks
     voc = saver.get("data.voc_type", "whistle")
     what = "Whistle and Moan Detector" if voc == "whistle" else "Click Detector"
     ui.markdown(f"#### Classify new data\nA folder of PAMGuard **{what}** binaries (the detection type this model "
-                "was trained on), optionally limited to a date range. Frames are made with the training settings, "
-                "the model predicts each frame, and each clock-aligned block gets the mean of its frames' "
-                "probabilities.")
+                "was trained on), optionally limited to a date range. Frames are made with the training settings "
+                "and the model classifies each frame. Afterwards, choose below how frames are filtered and grouped "
+                "into blocks: that is quick and needs no rerun.")
     if not_ready(p, "model", "model"):
         return
     path_row(saver, "new_data.binary_folder", "Folder of binary files", "dir")
     with ui.row().classes("gap-4"):
         field(saver, {"key": "new_data.start", "label": "From day (YYYY-MM-DD, optional)", "kind": "text"})
         field(saver, {"key": "new_data.end", "label": "To day (inclusive, optional)", "kind": "text"})
-    with ui.row().classes("gap-4 items-start"):
-        field(saver, {"key": "new_data.block_minutes", "label": "Block length", "kind": "select", "default": 1,
-                      "options": {1: "1 min", 2: "2 min", 5: "5 min", 10: "10 min", 15: "15 min", 30: "30 min",
-                                  60: "1 hour"}})
-        field(saver, {"key": "new_data.min_frames", "label": "Min frames per block", "kind": "int", "min": 1,
-                      "default": 1})
-        field(saver, {"key": "new_data.min_score", "label": "Min block score (0-1)", "kind": "number",
-                      "step": 0.01, "min": 0, "max": 1, "default": 0.0,
-                      "help": "top probability x its lead over the second; below = uncertain"})
 
     def go():
         if not saver.get("new_data.binary_folder"):
@@ -613,28 +613,73 @@ async def dl_classify_new(p, saver, start_run):
         start_run(["apply"])
     ui.button("Classify new data", icon="play_arrow", on_click=go)
     st = p.stage_states()
-    bl = p.folder / "apply" / "blocks.csv"
-    if st.get("apply") in ("done", "outdated") and bl.is_file():
-        if st["apply"] == "outdated":
-            ui.label("Settings changed since: classify again to update.").classes("text-amber-700")
-        blocks = _csv(bl)
-        with ui.row().classes("gap-3"):
-            for k, v in blocks["decision"].value_counts().items():
-                metric(str(k), int(v), "{:d}", "blocks")
-        if len(blocks):
-            ui.markdown("#### Presence over time")
-            slot = ImageSlot("w-full max-w-4xl")
-            bm = float(saver.get("new_data.block_minutes", 1) or 1)
-            show = blocks.copy()
-            show.insert(0, "block", pd.to_datetime(show["block_start"], unit="s", utc=True).dt.strftime(
-                "%Y-%m-%d %H:%M"))
-            with ui.expansion("Blocks", icon="table_rows").classes("w-full"):
-                table(show.drop(columns=["block_start", "block_end"]).round(3), rows=15)
-            for label, path in [("Block decisions", bl),
-                                ("Frame predictions (standard format)", p.folder / "apply" / "frame_predictions.csv")]:
-                if path.is_file():
-                    output_row(label, path, p.folder)
-            await slot.fill(lambda: timeline_fig(blocks, "decision", bm))
+    fp = p.folder / "apply" / "frame_predictions.csv"
+    if st.get("apply") not in ("done", "outdated") or not fp.is_file():
+        ui.separator().classes("my-4")
+        return
+    if st["apply"] == "outdated":
+        ui.label("The folder or dates changed since: classify again to update.").classes("text-amber-700")
+    frames = await run.io_bound(_frame_preds, fp)
+    v = {"block_minutes": 1, "min_frames": 1, "min_score": 0.0, "min_density": 0.0, "min_detections": 1,
+         **(saver.get("view") or {})}
+    ui.markdown(f"#### Results: {len(frames)} frames classified\nFilter frames and group them into clock-aligned "
+                "blocks; each block gets the mean of its kept frames' probabilities.")
+    with ui.row().classes("gap-6 items-end w-full"):
+        bsel = ui.select({1: "1 min", 2: "2 min", 5: "5 min", 10: "10 min", 15: "15 min", 30: "30 min", 60: "1 hour"},
+                         value=v["block_minutes"], label="Block length").classes("w-36")
+        mf = ui.number("Min frames per block", value=v["min_frames"], min=1, step=1).classes("w-44")
+        ms = ui.number("Min block score (0-1)", value=v["min_score"], min=0, max=1, step=0.01).classes("w-44")
+    with ui.row().classes("gap-8 items-center w-full"):
+        dens = None
+        if "density" in frames:
+            with ui.column().classes("w-72 gap-0"):
+                dl = ui.label().classes("text-sm")
+                dens = ui.slider(min=0, max=2, step=0.01, value=v["min_density"]).props("label")
+        with ui.column().classes("w-72 gap-0"):
+            cl = ui.label().classes("text-sm")
+            det = ui.slider(min=1, max=100, step=1, value=v["min_detections"]).props("label")
+    box = ui.column().classes("w-full")
+    noun = "contours" if voc == "whistle" else "clicks"
+
+    async def update(_=None):
+        cur = {"block_minutes": bsel.value, "min_frames": int(mf.value or 1), "min_score": float(ms.value or 0),
+               "min_density": float(dens.value) if dens else 0.0, "min_detections": int(det.value)}
+        if dens:
+            dl.text = f"Min whistle density per frame: {cur['min_density']:g}"
+        cl.text = f"Min {noun} per frame: {cur['min_detections']}"
+        if cur != {k: (saver.get('view') or {}).get(k) for k in cur}:
+            saver.set("view", cur)
+        blocks = await run.io_bound(dl_blocks, frames, None, None, cur["block_minutes"], cur["min_frames"],
+                                    cur["min_score"], cur["min_density"] or None, cur["min_detections"])
+        kept = int(blocks["n_frames"].sum()) if len(blocks) else 0
+        box.clear()
+        with box:
+            with ui.row().classes("gap-3"):
+                metric("Frames kept", kept / max(len(frames), 1), hint=f"{kept} of {len(frames)}")
+                for k, n in blocks["decision"].value_counts().items():
+                    metric(str(k), int(n), "{:d}", "blocks")
+
+            def save():
+                blocks.to_csv(p.folder / "apply" / "blocks.csv", index=False)
+                ui.notify("Saved apply/blocks.csv", type="positive")
+            with ui.row().classes("gap-2 items-center"):
+                ui.button("Save blocks CSV", icon="save", on_click=save).props("outline dense")
+                output_row("Frame predictions (every frame, all its values)", fp, p.folder)
+            if len(blocks):
+                slot = ImageSlot("w-full max-w-4xl")
+                with ui.expansion("Blocks", icon="table_rows").classes("w-full"):
+                    table(blocks.drop(columns=["block_start", "block_end"]).round(3), rows=15)
+                with ui.expansion("Frames", icon="table_rows").classes("w-full"):
+                    table(frames.drop(columns=[c for c in ("frame_start", "frame_end") if c in frames]).round(3),
+                          rows=15)
+                bm = float(cur["block_minutes"])
+                await slot.fill(lambda: timeline_fig(blocks, "decision", bm))
+    for el in [bsel, mf, ms, det] + ([dens] if dens else []):
+        if isinstance(el, type(det)) or el is dens:
+            el.on("change", update)
+        else:
+            el.on_value_change(update)
+    await update()
     ui.separator().classes("my-4")
 
 
