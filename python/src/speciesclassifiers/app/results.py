@@ -183,8 +183,9 @@ async def ct_results(p, saver):
     if not_ready(p, "windows", "windows"):
         return
     ws = read_json(p.folder / "windows" / "summary.json", {})
-    ui.markdown(f"#### Windows\n{ws.get('n_windows', 0)} windows; {ws.get('n_calls', 0)} annotated calls on "
-                f"{len(ws.get('annotated_days', []))} days.")
+    by = ws.get("n_windows_by_type") or {"whistle": ws.get("n_windows", 0)}
+    ui.markdown(f"#### Windows\n{', '.join(f'{n} {d} windows' for d, n in by.items())}; {ws.get('n_calls', 0)} "
+                f"annotations on {len(ws.get('annotated_days', []))} days.")
     lbd = _csv(p.folder / "windows" / "labels_by_day.csv")
     if lbd is not None:
         with ui.expansion("Window labels by day", icon="table_rows").classes("w-full"):
@@ -312,7 +313,7 @@ def decision_editor(saver):
 
 def _layer_names(p):
     f = p.folder / "discover" / "layers.csv"
-    return list(pd.read_csv(f)["layer"]) if f.is_file() else []
+    return list(dict.fromkeys(pd.read_csv(f)["layer"])) if f.is_file() else []
 
 
 def timeline_fig(blocks, task, block_minutes):
@@ -347,11 +348,22 @@ def timeline_fig(blocks, task, block_minutes):
 
 
 async def ct_apply(p, saver, start_run):
-    ui.markdown("#### Classify new data\nWhistle contours to classify with the library: PAMGuard binaries or "
-                "a contours JSON, optionally limited to a date range.")
-    ui.select({"binaries": "PAMGuard binaries (folder)", "json": "Contours JSON"}, value=saver.get("new_data.source"),
-              label="Source", on_change=lambda e: saver.set("new_data.source", e.value)).classes("w-80")
-    path_row(saver, "new_data.path", "Folder or file", "any", (".json", ".gz"))
+    d = saver.project.config()["data"]
+    whistles, clicks = d.get("use_whistles", True), d.get("use_clicks", False)
+    ui.markdown("#### Classify new data\nDetections to classify with the library, optionally limited to a date "
+                "range.")
+    if whistles:
+        ui.label("Whistle contours: PAMGuard binaries or a contours JSON").classes("text-sm font-medium")
+        ui.select({"binaries": "PAMGuard binaries (folder)", "json": "Contours JSON"},
+                  value=saver.get("new_data.source"), label="Source",
+                  on_change=lambda e: saver.set("new_data.source", e.value)).classes("w-80")
+        path_row(saver, "new_data.path", "Folder or file", "any", (".json", ".gz"))
+    if clicks:
+        ui.label("Clicks: PAMGuard binaries or a clicks CSV").classes("text-sm font-medium mt-2")
+        ui.select({"binaries": "PAMGuard binaries (folder)", "csv": "Clicks CSV"},
+                  value=saver.get("new_data.click_source", "binaries"), label="Source",
+                  on_change=lambda e: saver.set("new_data.click_source", e.value)).classes("w-80")
+        path_row(saver, "new_data.click_path", "Folder or file", "any", (".csv", ".gz"))
     with ui.row().classes("gap-4"):
         field(saver, {"key": "new_data.start", "label": "From day (YYYY-MM-DD, optional)", "kind": "text"})
         field(saver, {"key": "new_data.end", "label": "To day (inclusive, optional)", "kind": "text"})
@@ -362,8 +374,10 @@ async def ct_apply(p, saver, start_run):
         if st["apply"] == "outdated":
             ui.label("Settings changed since: classify again to update.").classes("text-amber-700")
         blocks = _csv(bl)
-        if "decision" in blocks:        # pathway: the final decision, then each layer
-            tasks = ["decision"] + [c for c in _layer_names(p) if c in blocks]
+        if "decision" in blocks:        # pathway: the final decision, then each layer (and each type's own)
+            layers = [c for c in _layer_names(p) if c in blocks]
+            tasks = ["decision"] + layers + [f"{c}_{t}" for c in layers for t in ("whistle", "click")
+                                              if f"{c}_{t}" in blocks]
         else:
             tasks = [t["name"] for t in saver.get("labels.tasks", []) or [] if t["name"] in blocks]
         if tasks and len(blocks):
@@ -380,7 +394,7 @@ async def ct_apply(p, saver, start_run):
                 await slot.fill(lambda: timeline_fig(blocks, task, bm))
             sel.on_value_change(draw)
             with ui.row().classes("gap-3"):
-                for t in tasks:
+                for t in tasks[:1 + len(_layer_names(p))]:
                     for k, v in blocks[t].value_counts().items():
                         metric(f"{t}: {k}", int(v), "{:d}", "blocks")
         show = blocks.copy()
@@ -395,13 +409,17 @@ async def ct_apply(p, saver, start_run):
 
 
 def outputs(p, bl):
-    ui.markdown("#### Outputs\nThe library holds everything needed to classify new contours the same way. "
+    clicks = (p.folder / "apply" / "windows_click.csv").is_file()
+    ui.markdown("#### Outputs\nThe library holds everything needed to classify new detections the same way. "
                 "`standalone.py` (next to it) runs it anywhere with numpy only: "
-                "`python standalone.py library.json contours.json blocks.csv`. In the project folder "
-                f"`{p.folder}`:")
+                "`python standalone.py library.json contours.json blocks.csv`" +
+                (" (with clicks: add `--clicks clicks.csv`; use `-` for no contours)" if clicks else "") +
+                f". In the project folder `{p.folder}`:")
     for label, path in [("Library", p.folder / "library" / "library.json"),
                         ("Standalone classifier", p.folder / "library" / "standalone.py"),
-                        ("Decision blocks", bl), ("Windows", p.folder / "apply" / "windows.csv"),
+                        ("Decision blocks", bl),
+                        ("Windows" + (" (whistles)" if clicks else ""), p.folder / "apply" / "windows.csv"),
+                        ("Windows (clicks)", p.folder / "apply" / "windows_click.csv"),
                         ("Window predictions (standard format)", p.folder / "apply" / "window_predictions_standard.csv"),
                         ("Clusters", p.folder / "discover" / "clusters.csv")]:
         if Path(path).is_file():
@@ -552,13 +570,17 @@ def _zip_info(path):
 
 
 # ============================================================================ call-type layers ======
-def _layer_data(p, name, block_minutes, min_score):
-    """Held-out rows and performance of one layer (cached per file version and threshold)."""
+TYPE_NAMES = {"": "Combined", "__whistle": "Whistles", "__click": "Clicks"}
+
+
+def _layer_data(p, name, block_minutes, min_score, variant=""):
+    """Held-out rows and performance of one layer (cached per file version and threshold). ``variant``: ""
+    (the layer's main result: combined when there are several detection types) or "__<type>"."""
     import json
 
     from speciesclassifiers.calltypes import multiclass as mc
-    f = p.folder / "discover" / f"heldout_{name}.csv"
-    meta = json.loads((p.folder / "discover" / f"heldout_{name}.json").read_text())
+    f = p.folder / "discover" / f"heldout_{name}{variant}.csv"
+    meta = json.loads((p.folder / "discover" / f"heldout_{name}{variant}.json").read_text())
     key = ("layer", str(f), f.stat().st_mtime, block_minutes)
     if key not in _CACHE:
         wp = pd.read_csv(f, dtype={"unit": str, "true": str, "day": str})
@@ -577,10 +599,23 @@ async def layer_section(p, saver, name, block_minutes):
     meta = json.loads((p.folder / "discover" / f"heldout_{name}.json").read_text())
     within = " > ".join(meta.get("path") or [])
     unit = "event" if meta.get("unit") == "event_id" else meta.get("unit", "day")
+    types = meta.get("types") or []
+    variants = [""] + [f"__{t}" for t in types if (p.folder / "discover" / f"heldout_{name}__{t}.json").is_file()] \
+        if meta.get("merged") else [""]
+    view = {"v": ""}
     with ui.card().classes("w-full p-4").props("flat bordered"):
         ui.label(f"Layer: {name}" + (f"  ·  within {within}" if within else "")).classes("text-lg font-medium")
         ui.label(f"Classes: {', '.join(meta['classes'])}. Tested by leaving out one {unit} at a time; blocks are "
                  f"{block_minutes} min.").classes("text-sm text-gray-600")
+        if len(variants) > 1:
+            ui.label("Each detection type is clustered on its own; 'Combined' multiplies their evidence per block "
+                     "(the decision new data gets). A class one type hasn't learned counts as neutral for it."
+                     ).classes("text-xs text-gray-500")
+            async def pick(e):
+                view["v"] = e.value
+                await show()
+            ui.toggle({v: TYPE_NAMES.get(v, v.strip("_")) for v in variants}, value="",
+                      on_change=pick).props("dense no-caps")
         cur = float((saver.get("decision.min_scores") or {}).get(name, 0.0))
         with ui.row().classes("items-center gap-4 w-full"):
             ui.label("Minimum block score").classes("text-sm")
@@ -612,7 +647,8 @@ async def layer_section(p, saver, name, block_minutes):
             if float(ms.get(name, 0.0)) != t:
                 ms[name] = t
                 saver.set("decision.min_scores", ms)
-            m, bp, up, bc, uc = await run.io_bound(_layer_data, p, name, block_minutes, t)
+            v = view["v"]
+            m, bp, up, bc, uc = await run.io_bound(_layer_data, p, name, block_minutes, t, v)
             box.clear()
             with box:
                 with ui.row().classes("gap-3"):
@@ -628,29 +664,39 @@ async def layer_section(p, saver, name, block_minutes):
                     s1, s2 = ImageSlot("w-[24rem]"), ImageSlot("w-[22rem]")
                     with ui.column().classes("min-w-64"):
                         table(rec, rows=12)
-            await s1.fill(lambda: draw_curve(bc, t, "Blocks: threshold curve"))
-            await s2.fill(lambda: draw_conf(bp["confusion"], "Blocks (rows: true)"))
+            what = TYPE_NAMES.get(v, "") + ": " if len(variants) > 1 else ""
+            await s1.fill(lambda: draw_curve(bc, t, f"{what}blocks, threshold curve"))
+            await s2.fill(lambda: draw_conf(bp["confusion"], f"{what}blocks (rows: true)"))
         sl.on("change", show)
         await show()
-        cf = p.folder / "discover" / f"clusters_{name}.csv"
-        if not cf.is_file():
-            cf = p.folder / "discover" / "clusters.csv"
-        cl = _csv(cf)
-        if cl is not None:
-            with ui.expansion("Clusters of this layer", icon="hub").classes("w-full"):
-                pc = [f"{name}_p_{c}" for c in meta["classes"] if f"{name}_p_{c}" in cl]
-                cols = ["cluster", "n", "n_days", f"{name}_verdict"] + pc
+        files = [(TYPE_NAMES[f"__{t}"], p.folder / "discover" / f"clusters_{name}__{t}.csv") for t in types] or \
+            [("", p.folder / "discover" / f"clusters_{name}.csv")]
+        if not files[0][1].is_file():
+            files = [("", p.folder / "discover" / "clusters.csv")]
+        for what, cf in files:
+            cl = _csv(cf)
+            if cl is None:
+                continue
+            with ui.expansion(f"Clusters of this layer{' · ' + what if what else ''}", icon="hub").classes("w-full"):
+                pc = [f"{name}_p_{c}" for c in m_classes(cl, name)]
+                cols = ["cluster", "n", "n_days", f"{name}_verdict"] + pc + \
+                       [c for c in cl.columns if c.startswith("median_")]
                 t = cl[[c for c in cols if c in cl]].rename(columns={f"{name}_verdict": "verdict",
                                                                       **{c: c.replace(f"{name}_p_", "p ") for c in pc}})
                 table(t, rows=15)
+
+
+def m_classes(cl, name):
+    pre = f"{name}_p_"
+    return [c[len(pre):] for c in cl.columns if c.startswith(pre)]
 
 
 async def layers_results(p, saver):
     import json
     lib_bm = saver.get("decision.block_minutes", 10)
     layers_csv = p.folder / "discover" / "layers.csv"
-    names = list(pd.read_csv(layers_csv)["layer"]) if layers_csv.is_file() else \
-        [f.stem[len("heldout_"):] for f in sorted((p.folder / "discover").glob("heldout_*.json"))]
+    names = list(dict.fromkeys(pd.read_csv(layers_csv)["layer"])) if layers_csv.is_file() else \
+        [f.stem[len("heldout_"):] for f in sorted((p.folder / "discover").glob("heldout_*.json")) if "__" not in f.stem]
     ui.markdown("#### Classification layers\nEach layer's clusters are judged on held-out data: windows from the "
                 "left-out event get the class probabilities of their clusters (computed without that event); a "
                 "block's probabilities are the average of its windows'. Raise a layer's threshold to leave unsure "

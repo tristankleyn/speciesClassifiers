@@ -178,7 +178,8 @@ def ct_defaults():
     from speciesclassifiers.calltypes import ContourParams
     cp = ContourParams().to_dict()
     return {
-        "data": {"source": "binaries", "path": ""},
+        "data": {"source": "binaries", "path": "", "use_whistles": True, "use_clicks": False,
+                 "click_source": "binaries", "click_path": ""},
         "labels": {"source": "periods", "path": "", "table_paths": [], "table_label_col": "Annotation",
                    "table_keep_cols": [], "other_labels": None, "tasks": [], "requires": {},
                    "include_unannotated_days": True, "pathway": None},
@@ -186,20 +187,24 @@ def ct_defaults():
             "contours": cp,
             "windows": {"window_s": 4.0, "overlap": 0.5, "assign_by": "overlap", "min_contours": 2,
                         "min_occupancy": 0.0, "min_longest_contour_s": 0.0, "freq_profile_bins": 32},
+            "clicks": {"window_s": 10.0, "overlap": 0.5, "min_clicks": 5, "max_ici_s": 1.0, "min_ici_s": 0.0},
+            "features": {"whistle": None, "click": None},
             "evaluate": {"max_per_class_per_day": 150, "min_class_n": 8, "rf_trees": 300},
             "discover": {"clusterer": "agglomerative", "cosine_threshold": 0.7, "min_cluster_size": 15,
                          "euclid_outlier_q": 0.95},
             "reliability": {"prior_strength": 10, "ci": 0.9, "min_label_days": 2, "unit": "event_id",
                             "balanced": True},
         },
-        "decision": {"block_minutes": 10, "rules": [], "min_scores": {}},
-        "new_data": {"source": "binaries", "path": "", "start": "", "end": ""},
+        "decision": {"block_minutes": 10, "rules": [], "min_scores": {}, "weights": {"whistle": 1.0, "click": 1.0}},
+        "new_data": {"source": "binaries", "path": "", "start": "", "end": "", "click_source": "binaries",
+                     "click_path": ""},
     }
 
 
 def ct_example():
     c = str(EXAMPLES / "contours_example_synthetic.json.gz")
-    return {"data": {"source": "json", "path": c},
+    k = str(EXAMPLES / "clicks_example_synthetic.csv.gz")
+    return {"data": {"source": "json", "path": c, "use_clicks": True, "click_source": "csv", "click_path": k},
             "labels": {"source": "csv", "path": str(EXAMPLES / "call_annotations_example_synthetic.csv"),
                        "other_labels": ["species", "ecotype"], "tasks": [], "requires": {},
                        "pathway": {"name": "species", "column": "species",
@@ -207,7 +212,8 @@ def ct_example():
             "settings": {"discover": {"min_cluster_size": 10}},
             "decision": {"block_minutes": 5,
                          "rules": [{"if": "block_meanfreq_range_hz", "op": "<", "value": 200, "then": "noise"}]},
-            "new_data": {"source": "json", "path": c, "start": "2024-06-04", "end": ""}}
+            "new_data": {"source": "json", "path": c, "start": "2024-06-04", "end": "", "click_source": "csv",
+                         "click_path": k}}
 
 
 def load_whistles(source, path, start="", end=""):
@@ -231,6 +237,58 @@ def load_whistles(source, path, start="", end=""):
     if end:
         wh = wh[wh["start"] < pd.Timestamp(end, tz="UTC").timestamp() + 86400]
     return wh.reset_index(drop=True)
+
+
+def load_clicks(source, path, start="", end=""):
+    """Click detections (``start`` Unix s, ``duration`` s) from PAMGuard Click Detector binaries or a CSV
+    (optionally .gz; ``start`` as Unix seconds or a UTC date-time)."""
+    t0 = pd.Timestamp(start, tz="UTC").timestamp() if start else None
+    t1 = pd.Timestamp(end, tz="UTC").timestamp() + 86400 if end else None
+    if source == "binaries":
+        from speciesclassifiers.io import read_clicks
+        periods = [(t0 or 0, t1 or 4e9)] if (t0 or t1) else None
+        cl, _ = read_clicks(path, periods=periods, keep_wave=False)
+        cl = cl[["start", "duration"]]
+    else:
+        cl = pd.read_csv(path)
+        if "start" not in cl:
+            raise ValueError(f"The clicks CSV needs a 'start' column; it has {', '.join(cl.columns[:20])}")
+        if not pd.api.types.is_numeric_dtype(cl["start"]):
+            cl["start"] = pd.to_datetime(cl["start"], utc=True).astype("int64") / 1e9
+    if t0 is not None:
+        cl = cl[cl["start"] >= t0]
+    if t1 is not None:
+        cl = cl[cl["start"] < t1]
+    return cl.reset_index(drop=True)
+
+
+def ct_detectors(cfg):
+    """Detection types used: "whistle" and/or "click"."""
+    d = cfg["data"]
+    return [x for x, on in (("whistle", d.get("use_whistles", True)), ("click", d.get("use_clicks", False))) if on]
+
+
+def ct_multi(cfg):
+    """Clicks in use: each detection type is clustered on its own and merged per block."""
+    return "click" in ct_detectors(cfg)
+
+
+def ct_features(cfg, det):
+    """The chosen feature keys of a detection type (None = the defaults)."""
+    from speciesclassifiers.calltypes.windows import default_features
+    f = (cfg["settings"].get("features") or {}).get(det)
+    if f is None and det == "click":
+        return default_features("click")
+    return f
+
+
+def ct_click_params(cfg):
+    from speciesclassifiers.calltypes.clicks import ClickWindowParams
+    return ClickWindowParams(**cfg["settings"].get("clicks", {}))
+
+
+def _windows_file(p, det):
+    return p.folder / "windows" / ("windows.pkl" if det == "whistle" else f"windows_{det}.pkl")
 
 
 def load_calls(lab):
@@ -263,47 +321,89 @@ def ct_window_params(cfg):
 def ct_contours(p, cfg):
     from speciesclassifiers.calltypes import ContourParams, prepare_contours
     d = cfg["data"]
+    out = p.stage_dir("contours")
+    if "whistle" not in ct_detectors(cfg):
+        (out / "contours.pkl").unlink(missing_ok=True)
+        _write_json({"n_read": 0, "n_kept": 0, "days": [], "note": "Whistles not used"}, out / "summary.json")
+        print("Whistles not used")
+        return
     wh = load_whistles(d["source"], d["path"])
     print(f"{len(wh)} contours read; measuring...")
     c, pts = prepare_contours(wh, ContourParams(**cfg["settings"]["contours"]))
-    out = p.stage_dir("contours")
     _save_pickle((c, pts), out / "contours.pkl")
     _write_json({"n_read": len(wh), "n_kept": len(c), "days": sorted(c["day"].unique().tolist()) if len(c) else []},
                 out / "summary.json")
     print(f"{len(c)} of {len(wh)} contours kept")
 
 
+def ct_clicks(p, cfg):
+    from speciesclassifiers.calltypes.clicks import prepare_clicks
+    d = cfg["data"]
+    raw = load_clicks(d.get("click_source", "binaries"), d.get("click_path", ""))
+    c = prepare_clicks(raw)
+    out = p.stage_dir("clicks")
+    _save_pickle(c, out / "clicks.pkl")
+    _write_json({"n_clicks": len(c), "days": sorted(c["day"].unique().tolist()) if len(c) else []},
+                out / "summary.json")
+    print(f"{len(c)} clicks read")
+
+
 def ct_windows(p, cfg):
     from speciesclassifiers.calltypes import label_windows, make_windows, window_features
-    c, pts = load_pickle(p.folder / "contours" / "contours.pkl")
-    wp = ct_window_params(cfg)
-    w = window_features(make_windows(c, wp), c, pts, wp)
+    from speciesclassifiers.calltypes.windows import label_windows_by_period
+    dets = ct_detectors(cfg)
+    if not dets:
+        raise ValueError("Choose at least one detection type (whistles or clicks).")
     calls = load_calls(cfg["labels"])
     carry = other_label_columns(calls, cfg["labels"])
-    if cfg["labels"]["source"] == "periods":     # each window takes the labels of the period it falls in
-        from speciesclassifiers.calltypes.windows import label_windows_by_period
-        cols = ["event_id"] + [c for c in carry if c != "event_id"]
-        w = label_windows_by_period(w.assign(label="none"), calls, columns=cols)
-        w.loc[w["label_source"] != "unannotated", "label"] = "untyped"     # no call types
-    else:
-        w = label_windows(w, calls, wp, carry=list(dict.fromkeys([*carry, "event_id"])))
+    periods = cfg["labels"]["source"] == "periods"
+    cols = ["event_id"] + [c for c in carry if c != "event_id"]
+    wins = {}
+    if "whistle" in dets:
+        c, pts = load_pickle(p.folder / "contours" / "contours.pkl")
+        wp = ct_window_params(cfg)
+        w = window_features(make_windows(c, wp), c, pts, wp)
+        if periods:     # each window takes the labels of the period it falls in
+            w = label_windows_by_period(w.assign(label="none"), calls, columns=cols)
+            w.loc[w["label_source"] != "unannotated", "label"] = "untyped"     # no call types
+        else:
+            w = label_windows(w, calls, wp, carry=list(dict.fromkeys([*carry, "event_id"])))
+        wins["whistle"] = w
+    if "click" in dets:
+        from speciesclassifiers.calltypes.clicks import click_windows, event_periods
+        clicks = load_pickle(p.folder / "clicks" / "clicks.pkl")
+        w = click_windows(clicks, ct_click_params(cfg))
+        per = calls if periods else event_periods(calls, cols)    # call annotations: the event's span
+        w = label_windows_by_period(w.assign(label="none"), per, columns=cols)
+        w.loc[w["label_source"] != "unannotated", "label"] = "untyped"
+        wins["click"] = w
     days = sorted(pd.to_datetime(calls["start"], unit="s", utc=True).dt.strftime("%Y%m%d").unique())
     out = p.stage_dir("windows")
-    _save_pickle(w, out / "windows.pkl")
-    w.drop(columns=[x for x in w.columns if x.startswith("prof_")]).to_csv(out / "windows.csv", index=False)
-    pd.crosstab(w["label"], w["day"]).to_csv(out / "labels_by_day.csv")
-    _write_json({"n_windows": len(w), "annotated_days": days, "other_labels": carry, "n_calls": len(calls),
-                 "label_counts": w["label"].value_counts().to_dict()}, out / "summary.json")
-    what = "labelled periods" if cfg["labels"]["source"] == "periods" else "annotated calls"
-    print(f"{len(w)} windows; {len(calls)} {what} on {len(days)} days")
+    for f in list(out.glob("windows*")):
+        f.unlink()
+    for det, w in wins.items():
+        sfx = "" if det == "whistle" else f"_{det}"
+        _save_pickle(w, out / f"windows{sfx}.pkl")
+        w.drop(columns=[x for x in w.columns if x.startswith("prof_")]).to_csv(out / f"windows{sfx}.csv", index=False)
+    w0 = wins.get("whistle", next(iter(wins.values())))
+    pd.crosstab(w0["label"], w0["day"]).to_csv(out / "labels_by_day.csv")
+    _write_json({"n_windows": len(w0), "annotated_days": days, "other_labels": carry, "n_calls": len(calls),
+                 "label_counts": w0["label"].value_counts().to_dict(), "detectors": dets,
+                 "n_windows_by_type": {d: len(w) for d, w in wins.items()}}, out / "summary.json")
+    what = "labelled periods" if periods else "annotated calls"
+    print(", ".join(f"{len(w)} {d} windows" for d, w in wins.items()) + f"; {len(calls)} {what} on {len(days)} days")
 
 
 def ct_evaluate(p, cfg):
     from speciesclassifiers.calltypes import EvalParams, evaluate, select_rows
-    w = load_pickle(p.folder / "windows" / "windows.pkl")
-    ep = EvalParams(**cfg["settings"]["evaluate"])
-    sel = select_rows(w, ep)
     out = p.stage_dir("evaluate")
+    if "whistle" not in ct_detectors(cfg):
+        _write_json({"note": "Call types are evaluated for whistles only."}, out / "evaluate.json")
+        print("Whistles not used: skipped")
+        return
+    w = load_pickle(p.folder / "windows" / "windows.pkl")
+    ep = EvalParams(**cfg["settings"]["evaluate"], features=ct_features(cfg, "whistle"))
+    sel = select_rows(w, ep)
     if sel["label"].nunique() < 2:
         _write_json({"note": "Fewer than 2 call types with enough labelled windows: nothing to evaluate."},
                     out / "evaluate.json")
@@ -326,14 +426,16 @@ def ct_tasks(cfg):
 
 def ct_discover(p, cfg):
     from speciesclassifiers.calltypes import DiscoverParams, ReliabilityParams, discover, discovery_pool
-    w = load_pickle(p.folder / "windows" / "windows.pkl")
     days = read_json(p.folder / "windows" / "summary.json")["annotated_days"]
-    pool = discovery_pool(w, days, include_unannotated_days=cfg["labels"].get("include_unannotated_days", True))
-    print(f"Clustering {len(pool)} windows...")
     tasks = ct_tasks(cfg)
     rp = ReliabilityParams(**{**cfg["settings"]["reliability"], "block_minutes": cfg["decision"]["block_minutes"]})
-    dp = DiscoverParams(**cfg["settings"]["discover"])
     tree = cfg["labels"].get("pathway")
+    if ct_multi(cfg):
+        return ct_discover_multi(p, cfg, days, tree, rp)
+    w = load_pickle(p.folder / "windows" / "windows.pkl")
+    pool = discovery_pool(w, days, include_unannotated_days=cfg["labels"].get("include_unannotated_days", True))
+    print(f"Clustering {len(pool)} windows...")
+    dp = DiscoverParams(**cfg["settings"]["discover"], features=ct_features(cfg, "whistle"))
     if tree:
         return ct_discover_pathway(p, pool, tree, dp, rp)
     r = discover(pool, dp, tasks, rp)
@@ -348,6 +450,66 @@ def ct_discover(p, cfg):
     if len(r["decision_windows"]):
         r["decision_windows"].to_csv(out / "decision_windows.csv", index=False)
     print(f"{r['scorecard']['n_clusters']} clusters, {r['scorecard']['frac_unassigned']:.0%} of windows unassigned")
+
+
+def ct_discover_multi(p, cfg, days, tree, rp):
+    """Each detection type clustered through the pathway on its own; held-out results merged per block."""
+    from speciesclassifiers.calltypes import DiscoverParams, discovery_pool
+    from speciesclassifiers.calltypes import multiclass as mc
+    from speciesclassifiers.calltypes.pathway import check_pathway, discover_pathway, iter_results, layer_summaries
+    if not tree:
+        raise ValueError("Using clicks needs a classification: set up its layers on the Labels step.")
+    problems = check_pathway(tree)
+    if problems:
+        raise ValueError("Pathway: " + " ".join(problems))
+    out = p.stage_dir("discover")
+    for old in [*out.glob("heldout_*"), *out.glob("clusters*.csv"), *out.glob("*.pkl")]:
+        old.unlink()
+    weights = cfg["decision"].get("weights") or {}
+    prs, layers, preds, bases, nodes = {}, [], {}, {}, {}
+    for det in ct_detectors(cfg):
+        w = load_pickle(_windows_file(p, det))
+        pool = discovery_pool(w, days, include_unannotated_days=cfg["labels"].get("include_unannotated_days", True))
+        print(f"{det.capitalize()}s: clustering {len(pool)} windows...")
+        dp = DiscoverParams(**cfg["settings"]["discover"], features=ct_features(cfg, det))
+        pr = prs[det] = discover_pathway(pool, tree, dp, rp)
+        _save_pickle(pr, out / f"pathway_{det}.pkl")
+        layers.append(layer_summaries(pr).assign(type=det))
+        for r in iter_results(pr):
+            name = r["node"]["name"]
+            r["result"]["summary"].to_csv(out / f"clusters_{name}__{det}.csv", index=False)
+            m = r["result"]["multiclass"][name]
+            nodes.setdefault(name, (r["path"], r["node"]["column"]))
+            if len(m.get("window_preds", [])):
+                m["window_preds"].to_csv(out / f"heldout_{name}__{det}.csv", index=False)
+                _write_json({"classes": m["classes"], "unit": m["unit"], "base": m["base"], "path": r["path"],
+                             "column": r["node"]["column"], "type": det}, out / f"heldout_{name}__{det}.json")
+                preds.setdefault(name, {})[det] = m["window_preds"]
+                bases.setdefault(name, {})[det] = m["base"]
+    merged_rows = []
+    for name, P in preds.items():
+        hm = mc.merge_heldout(P, bases[name], weights, cfg["decision"]["block_minutes"])
+        if not len(hm):
+            continue
+        classes = hm.attrs["classes"]
+        hm.to_csv(out / f"heldout_{name}.csv", index=False)
+        path, column = nodes[name]
+        _write_json({"classes": classes, "unit": mc.unit_col(rp), "base": {c: 1 / len(classes)
+                     for c in classes}, "path": path, "column": column, "merged": True, "types": list(P)},
+                    out / f"heldout_{name}.json")
+        row = {"layer": name, "within": " > ".join(path) or "(all)", "classes": ", ".join(classes),
+               "windows": sum(len(x) for x in P.values()), "clusters": None, "type": "merged"}
+        for lvl in ("block", "unit"):
+            perf = mc.performance(mc.aggregate(hm, classes, lvl, cfg["decision"]["block_minutes"]), classes, 0.0)
+            row[f"{lvl}_accuracy"], row[f"{lvl}_balanced_accuracy"] = perf["accuracy"], perf["balanced_accuracy"]
+        merged_rows.append(row)
+    lt = pd.concat([*layers, pd.DataFrame(merged_rows)], ignore_index=True)
+    lt = lt[["layer", "type", *[c for c in lt.columns if c not in ("layer", "type")]]]
+    lt.to_csv(out / "layers.csv", index=False)
+    _write_json({"pathway": True, "types": list(prs), "layers": list(dict.fromkeys(lt["layer"])),
+                 "n_clusters": {f"{r['node']['name']}__{d}": r["result"]["scorecard"]["n_clusters"]
+                                for d, pr in prs.items() for r in iter_results(pr)}}, out / "scorecard.json")
+    print(lt.to_string(index=False))
 
 
 def ct_discover_pathway(p, pool, tree, dp, rp):
@@ -379,6 +541,8 @@ def ct_discover_pathway(p, pool, tree, dp, rp):
 
 def ct_library(p, cfg):
     from speciesclassifiers.calltypes import ContourParams, build_library, save_library, self_check
+    if ct_multi(cfg):
+        return ct_library_multi(p, cfg)
     if cfg["labels"].get("pathway"):
         return ct_library_pathway(p, cfg)
     r = load_pickle(p.folder / "discover" / "discover.pkl")
@@ -417,6 +581,30 @@ def ct_library_pathway(p, cfg):
     print(f"Pathway library: {n} layer(s)")
 
 
+def ct_library_multi(p, cfg):
+    import shutil
+
+    from speciesclassifiers.calltypes import ContourParams, save_library, standalone
+    from speciesclassifiers.calltypes.detectors import build_multi_library
+    from speciesclassifiers.calltypes.pathway import build_pathway_library
+    libs = {}
+    for det in ct_detectors(cfg):
+        pr = load_pickle(p.folder / "discover" / f"pathway_{det}.pkl")
+        whistle = det == "whistle"
+        libs[det] = build_pathway_library(
+            pr, ContourParams(**cfg["settings"]["contours"]) if whistle else None,
+            ct_window_params(cfg) if whistle else ct_click_params(cfg), block_minutes=cfg["decision"]["block_minutes"],
+            rules=(cfg["decision"].get("rules") or None) if whistle else None, name=cfg.get("name", "calltypes"),
+            min_scores=cfg["decision"].get("min_scores") or {})
+    lib = build_multi_library(libs, cfg["decision"].get("weights"), cfg["decision"]["block_minutes"],
+                              cfg.get("name", "calltypes"))
+    out = p.stage_dir("library")
+    save_library(lib, out / "library.json")
+    shutil.copy(standalone.__file__, out / "standalone.py")
+    (out / "self_check.json").unlink(missing_ok=True)
+    print("Library: " + ", ".join(f"{d}s {sum(1 for _ in _lib_nodes(lb))} layer(s)" for d, lb in libs.items()))
+
+
 def _lib_nodes(lib):
     yield lib
     for c in (lib.get("children") or {}).values():
@@ -427,6 +615,8 @@ def ct_apply(p, cfg):
     from speciesclassifiers.calltypes import classify_contours, load_library, standard_output
     lib = load_library(p.folder / "library" / "library.json")
     n = cfg["new_data"]
+    if lib.get("multi_detector"):
+        return ct_apply_multi(p, lib, n)
     wh = load_whistles(n["source"], n["path"], n.get("start", ""), n.get("end", ""))
     print(f"Classifying {len(wh)} contours...")
     if lib.get("layer"):
@@ -447,23 +637,48 @@ def ct_apply(p, cfg):
     print(f"{len(w)} windows -> {len(blocks)} decision blocks")
 
 
+def ct_apply_multi(p, lib, n):
+    from speciesclassifiers.calltypes.detectors import classify_multi
+    raw = {}
+    if "whistle" in lib["detectors"]:
+        raw["whistle"] = load_whistles(n["source"], n["path"], n.get("start", ""), n.get("end", ""))
+    if "click" in lib["detectors"]:
+        if not n.get("click_path"):
+            raise ValueError("The library uses clicks: choose the new data's clicks.")
+        raw["click"] = load_clicks(n.get("click_source", "binaries"), n["click_path"], n.get("start", ""),
+                                   n.get("end", ""))
+    print("Classifying " + ", ".join(f"{len(v)} {d}s" for d, v in raw.items()) + "...")
+    wins, blocks = classify_multi(raw, lib)
+    out = p.stage_dir("apply")
+    for f in [*out.glob("windows*.csv"), out / "window_predictions_standard.csv"]:
+        f.unlink(missing_ok=True)
+    for d, w in wins.items():
+        w.drop(columns=[x for x in w.columns if x.startswith("prof_")]).to_csv(
+            out / ("windows.csv" if d == "whistle" else f"windows_{d}.csv"), index=False)
+    blocks.to_csv(out / "blocks.csv", index=False)
+    print(", ".join(f"{len(w)} {d} windows" for d, w in wins.items()) + f" -> {len(blocks)} decision blocks")
+
+
 CALLTYPES = Workflow(
     "calltypes", "Call types",
     "Find call types in whistle contours and judge them for labels you choose (e.g. species, population), "
     "from call annotations on some days. Classifies new data in clock-aligned blocks.",
-    [Stage("contours", "Read and measure contours", ct_contours, ["data", "settings.contours"]),
+    [Stage("contours", "Read and measure contours", ct_contours,
+           ["data.source", "data.path", "data.use_whistles", "settings.contours"]),
+     Stage("clicks", "Read clicks", ct_clicks, ["data.click_source", "data.click_path"], optional=True,
+           enabled=lambda cfg: bool(cfg.get("data", {}).get("use_clicks"))),
      Stage("windows", "Windows, features and labels", ct_windows,
            ["labels.source", "labels.path", "labels.table_paths", "labels.table_label_col",
-            "labels.table_keep_cols", "labels.other_labels", "settings.windows"]),
-     Stage("evaluate", "Evaluate labelled call types", ct_evaluate, ["settings.evaluate"]),
+            "labels.table_keep_cols", "labels.other_labels", "settings.windows", "settings.clicks",
+            "data.use_whistles", "data.use_clicks"]),
+     Stage("evaluate", "Evaluate labelled call types", ct_evaluate, ["settings.evaluate", "settings.features"]),
      Stage("discover", "Discover (cluster + verdicts)", ct_discover,
            ["labels.tasks", "labels.pathway", "labels.include_unannotated_days", "settings.discover",
-            "settings.reliability",
-            "decision.block_minutes"],
+            "settings.reliability", "settings.features", "decision.block_minutes", "decision.weights"],
            after="windows"),
      Stage("library", "Build library", ct_library, ["decision", "labels.requires"]),
      Stage("apply", "Classify new data", ct_apply, ["new_data"], optional=True,
-           enabled=lambda cfg: bool(cfg.get("new_data", {}).get("path")))],
+           enabled=lambda cfg: bool(cfg.get("new_data", {}).get("path") or cfg.get("new_data", {}).get("click_path")))],
     ct_defaults, ct_example)
 
 

@@ -52,16 +52,37 @@ def test_failure_is_recorded(tmp_path):
 
 
 def test_calltypes_run(tmp_path):
+    """The example: whistles and clicks, each clustered through the pathway, merged per block."""
     p = Project.create(tmp_path / "ct", "calltypes", config=WORKFLOWS["calltypes"].example())
     assert run(p.folder) == "finished"
     lib = json.loads((p.folder / "library" / "library.json").read_text())
-    assert lib["block_minutes"] == 5 and lib["rules"]
+    assert lib["multi_detector"] and set(lib["detectors"]) == {"whistle", "click"}
+    assert lib["block_minutes"] == 5 and lib["detectors"]["whistle"]["rules"]
     assert (p.folder / "library" / "standalone.py").is_file()
+    assert (p.folder / "discover" / "heldout_species.json").is_file()
+    assert json.loads((p.folder / "discover" / "heldout_species.json").read_text())["merged"]
+    assert (p.folder / "discover" / "heldout_species__click.csv").is_file()
     b = pd.read_csv(p.folder / "apply" / "blocks.csv")
     assert "noise" in set(b["species"]) and {"X", "Y"} <= set(b["species"])
+    assert {"species_whistle", "species_click", "n_windows_click"} <= set(b.columns)
+    assert "E1" in set(b["decision"])
     p.update_config({"settings": {"evaluate": {"rf_trees": 50}}})   # evaluate doesn't feed discover
     s = p.stage_states()
     assert s["evaluate"] == "outdated" and s["discover"] == "done" and s["library"] == "done"
+    p.update_config({"settings": {"features": {"click": ["ici_median_s", "ici_std_s"]}}})
+    s = p.stage_states()
+    assert s["windows"] == "done" and s["discover"] == "outdated"
+
+
+def test_calltypes_whistles_only(tmp_path):
+    p = Project.create(tmp_path / "ct", "calltypes", config=WORKFLOWS["calltypes"].example())
+    p.update_config({"data": {"use_clicks": False}, "new_data": {"click_path": ""}})
+    assert p.stage_states()["clicks"] == "skipped"
+    assert run(p.folder) == "finished"
+    lib = json.loads((p.folder / "library" / "library.json").read_text())
+    assert not lib.get("multi_detector") and lib["rules"] and lib["layer"]["name"] == "species"
+    b = pd.read_csv(p.folder / "apply" / "blocks.csv")
+    assert "noise" in set(b["species"]) and {"X", "Y"} <= set(b["species"])
 
 
 def test_checks():

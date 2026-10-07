@@ -162,3 +162,71 @@ def threshold_curve(rows, classes, thresholds=None):
     return pd.DataFrame([{"threshold": t, **{k: v for k, v in performance(rows, classes, t).items()
                                               if k in ("coverage", "accuracy", "balanced_accuracy")}}
                          for t in thresholds])
+
+
+# ------------------------------------------------------------------------ several detection types ---
+def merge_evidence(probs, bases, weights=None):
+    """Combine class probabilities from several detection types (e.g. whistles and clicks) for the same blocks.
+
+    probs    {detector: DataFrame of class probabilities (columns = classes; rows = blocks, NaN = no data)}
+    bases    {detector: {class: overall rate}} (what the detector's probabilities are measured against)
+    weights  {detector: weight}, default 1 each
+
+    Each detector's evidence for a class is how far its probability is above or below the class's overall
+    rate (p / base); a class a detector doesn't know is neutral (x1). Merged probabilities are the product of
+    the evidence (each to the power of its weight), normalised, over all classes. A block with data from only
+    one detector keeps that detector's probabilities. Returns a DataFrame over the union of classes.
+    """
+    dets = list(probs)
+    classes = list(dict.fromkeys(c for d in dets for c in probs[d].columns))
+    n = len(next(iter(probs.values()))) if dets else 0
+    logev = np.zeros((n, len(classes)))
+    has = np.zeros((n, len(dets)), bool)
+    single = np.full((n, len(classes)), np.nan)
+    for j, d in enumerate(dets):
+        P = probs[d].reindex(columns=classes).to_numpy(float)
+        ok = ~np.isnan(P).all(axis=1)
+        has[:, j] = ok
+        base = np.array([float((bases.get(d) or {}).get(c, np.nan)) for c in classes])
+        known = np.isfinite(base) & ~np.isnan(P)
+        ratio = np.where(known, np.clip(np.nan_to_num(P, nan=1.0), 1e-9, None) / np.where(known, base, 1.0), 1.0)
+        logev += float((weights or {}).get(d, 1.0)) * np.where(ok[:, None], np.log(ratio), 0.0)
+        single[ok] = np.nan_to_num(P[ok], nan=0.0)
+    ev = np.exp(logev - logev.max(axis=1, keepdims=True))
+    out = ev / ev.sum(axis=1, keepdims=True)
+    n_has = has.sum(axis=1)
+    out[n_has == 1] = single[n_has == 1]
+    out[n_has == 0] = np.nan
+    return pd.DataFrame(out, columns=classes, index=next(iter(probs.values())).index if dets else None)
+
+
+def merge_heldout(window_preds, bases, weights=None, block_minutes=10):
+    """Held-out window predictions of several detectors {detector: DataFrame from ``loo_multiclass``} ->
+    one row per (unit, block) with merged ``p_<class>``, ``true`` (majority over all detectors' windows) and
+    ``n_<detector>`` (windows with probabilities), ready for ``aggregate(..., level="block" or "unit")``."""
+    per, trues = {}, []
+    for d, P in window_preds.items():
+        if not len(P):
+            continue
+        pc = [c for c in P.columns if c.startswith("p_")]
+        key = (np.floor(P["w_start"] / (60 * block_minutes)) * 60 * block_minutes).astype(np.int64)
+        g = P.assign(block=key).groupby(["unit", "block"])
+        m = g[pc].mean()
+        m.columns = [c[2:] for c in pc]
+        m[f"__n_{d}"] = g[pc[0]].count()
+        per[d] = m
+        trues.append(P.assign(block=key)[["unit", "block", "true"]])
+    if not per:
+        return pd.DataFrame()
+    idx = sorted(set().union(*[set(m.index) for m in per.values()]))
+    idx = pd.MultiIndex.from_tuples(idx, names=["unit", "block"])
+    merged = merge_evidence({d: m.drop(columns=[f"__n_{d}"]).reindex(idx) for d, m in per.items()}, bases, weights)
+    out = merged.add_prefix("p_")
+    t = pd.concat(trues).groupby(["unit", "block"])["true"].agg(lambda s: s.value_counts().index[0])
+    out.insert(0, "true", t.reindex(idx).to_numpy())
+    for d, m in per.items():
+        out[f"n_{d}"] = m[f"__n_{d}"].reindex(idx).fillna(0).astype(int).to_numpy()
+    out = out.reset_index()
+    out["w_start"] = out["block"].astype(float)
+    out.attrs["classes"] = list(merged.columns)
+    return out

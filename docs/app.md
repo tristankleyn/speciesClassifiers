@@ -26,11 +26,11 @@ A project runs as a series of stages (e.g. read detections → cross-validation 
 - Runs continue in the background if you close the browser; reopen the project to see progress. **Stop** ends a run between steps.
 
 ## Screens
-1. **Data**: where your detections are (ROCCA contour stats / a feature table; PAMGuard binaries with an annotations CSV, or frames from notebook 01, for delphinID; PAMGuard whistle binaries / a contours JSON for call types). **Check** reads them and reports counts, date ranges and problems before you run anything.
+1. **Data**: where your detections are (ROCCA contour stats / a feature table; PAMGuard binaries with an annotations CSV, or frames from notebook 01, for delphinID; for call types: whistles (PAMGuard binaries / a contours JSON) and/or clicks (PAMGuard binaries / a clicks CSV)). **Check** reads them and reports counts, date ranges and problems before you run anything.
 2. **Labels** (call types): labelled periods (events) or call annotations, and the **classification**: one or more layers, each deciding a label (every value a class, or values grouped into classes), with optional next layers within a class or group (e.g. group, then species within the group). Testing leaves out one event (or day) at a time.
-3. **Settings**: the main settings with short explanations; less common ones under *Advanced*.
+3. **Settings**: the main settings with short explanations; less common ones under *Advanced*. Call types: the features each detection type uses (view their values and tick them), click window settings, and the weight of whistles and clicks when combined.
 4. **Run**: stages, progress bar, log.
-5. **Results**: cross-validated accuracy, confusion matrices, clusters and their verdicts. Random forest: sliders for the decision thresholds with the threshold curve. Call types: per layer, block and event accuracy with a threshold slider and curve, and the layer's clusters; block length and decision rules.
+5. **Results**: cross-validated accuracy, confusion matrices, clusters and their verdicts. Random forest: sliders for the decision thresholds with the threshold curve. Call types: per layer (combined, or whistles / clicks alone), block and event accuracy with a threshold slider and curve, and the layer's clusters; block length and decision rules.
 6. **Classify new data · export**: apply the classifier to new data (group decisions, or a presence timeline of decision blocks) and find the outputs: the model, the call-type library and `standalone.py`, predictions in the standard format.
 
 ## delphinID and TensorFlow

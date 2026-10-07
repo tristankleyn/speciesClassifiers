@@ -34,6 +34,7 @@ class DiscoverParams:
                        holds more than new_max_day_share of it, and it has >= new_min_n windows
     examples_per_cluster most typical windows per cluster listed for listening
     exclude_features   features containing any of these are not used
+    features           the chosen feature keys (see ``windows.feature_catalog``); None = all not excluded
     random_state       random seed
     """
 
@@ -51,6 +52,7 @@ class DiscoverParams:
     new_min_n: int = 25
     examples_per_cluster: int = 10
     exclude_features: list = field(default_factory=lambda: ["amplitude", "snr", "signal", "noise", "mean_width"])
+    features: list = None
     random_state: int = 42
 
     def to_dict(self):
@@ -204,6 +206,10 @@ def hybrid_cluster(X, w, params: DiscoverParams, weight_labels=None):
 
 
 # ------------------------------------------------------------------------ summaries --------
+SUMMARY_COLS = (("mean_freq_hz", "mean_freq_hz_mean"), ("lc_duration_s", "lc_duration_s"),
+                ("n_contours", "n_contours"), ("n_clicks", "n_clicks"), ("ici_s", "ici_median_s"))
+
+
 def summarise_clusters(w, cl, space, params: DiscoverParams, tasks=()):
     """One row per cluster (-1 = unassigned) plus the most typical windows of each cluster."""
     from scipy.stats import binom
@@ -219,9 +225,7 @@ def summarise_clusters(w, cl, space, params: DiscoverParams, tasks=()):
              "call_types": "; ".join(f"{k}:{v}" for k, v in lab.head(5).items()),
              "n_days": g["day"].nunique(),
              "days": "; ".join(f"{k}:{v}" for k, v in g["day"].value_counts().items()),
-             "median_mean_freq_hz": g["mean_freq_hz_mean"].median(),
-             "median_lc_duration_s": g["lc_duration_s"].median(),
-             "median_n_contours": g["n_contours"].median()}
+             **{f"median_{k}": g[c].median() for k, c in SUMMARY_COLS if c in g}}
         for t in tasks:                                  # make-up of each label column
             if t.column in g:
                 vc = g[t.column].value_counts(normalize=True)
@@ -462,7 +466,7 @@ def discover(pool, params: DiscoverParams = None, tasks=(), rp: ReliabilityParam
             unl, max(min(params.max_windows - len(known), len(unl)), 0), replace=False)
         w = w.iloc[np.sort(np.r_[known, pick])].reset_index(drop=True)
         print(f"  subsampled to {len(w)} windows (max_windows)")
-    spec = fit_feature_spec(w, params.exclude_features)
+    spec = fit_feature_spec(w, params.exclude_features, params.features)
     X = apply_feature_spec(w, spec)
     weight_labels = None
     if (w["label"] != "unlabelled").sum() == 0 or w.loc[w["label"] != "unlabelled", "label"].nunique() < 2:

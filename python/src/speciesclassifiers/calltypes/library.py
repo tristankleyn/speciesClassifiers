@@ -95,7 +95,7 @@ def build_library(result, contour_params: ContourParams, window_params: WindowPa
     wts = np.asarray(st["weights"], float)
     Z = Xs * wts
     Zu = Z / np.maximum(np.linalg.norm(Z, axis=1, keepdims=True), 1e-9)
-    if contour_params.snr_top_frac:
+    if contour_params is not None and contour_params.snr_top_frac:
         print("Note: snr_top_frac is relative to each batch of contours classified; "
               "consider a fixed min_snr_db for the library.")
     cl = w["cluster"].to_numpy()
@@ -132,7 +132,8 @@ def build_library(result, contour_params: ContourParams, window_params: WindowPa
         "library_version": name or "calltypes-" + created.strftime("%Y%m%d-%H%M%S"),
         "created_utc": created.isoformat(),
         "n_training_windows": int(len(w)), "n_training_days": int(w["day"].nunique()),
-        "contour_params": contour_params.to_dict(),
+        "detection_type": "whistle" if contour_params is not None else "click",
+        "contour_params": contour_params.to_dict() if contour_params is not None else None,
         "window_params": {**window_params.to_dict(), "mode": "sliding"},
         "cosine_threshold": float(result["params"].cosine_threshold),
         "block_minutes": block_minutes,
@@ -273,7 +274,7 @@ def block_votes(windows, contours, lib, period=None):
     # contours in each window, as in window_features
     cs, ce = contours["start"].to_numpy(float), contours["end"].to_numpy(float)
     wsf, wef = windows["w_start"].to_numpy(float), windows["w_end"].to_numpy(float)
-    if lib["window_params"]["assign_by"] == "midpoint":
+    if lib["window_params"].get("assign_by") == "midpoint":
         mid = (cs + ce) / 2
         I, J, _ = pair_intervals(wsf, wef, mid, mid + 1e-9)
     else:
@@ -293,8 +294,9 @@ def block_votes(windows, contours, lib, period=None):
         r = {"block_start": b / NS, "block_end": (b + blk) / NS, "n_windows": len(wi),
              "n_assigned": int((g["cluster"] >= 0).sum()) if len(wi) else 0, "n_contours": len(cidx),
              "block_meanfreq_range_hz": float(mf[cidx].max() - mf[cidx].min()) if len(cidx) else None,
-             "block_median_abs_slope_hz_s": _median(g["mean_abs_slope_hz_s_mean"]) if len(wi) else None,
-             "block_median_freq_hz": _median(g["pts_mean_freq_hz"]) if len(wi) else None,
+             "block_median_abs_slope_hz_s": _median(g["mean_abs_slope_hz_s_mean"])
+             if len(wi) and "mean_abs_slope_hz_s_mean" in g else None,
+             "block_median_freq_hz": _median(g["pts_mean_freq_hz"]) if len(wi) and "pts_mean_freq_hz" in g else None,
              "block_median_contour_s": float(np.median(dur[cidx])) if len(cidx) else None}
         for t in tasks:
             if t.get("classes"):      # multi-class: mean class probabilities of the assigned windows

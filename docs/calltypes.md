@@ -1,6 +1,6 @@
 # Call types
 
-Build a call-type library from whistle contours and classify new recordings with it. Python only. Notebook: `05_calltypes` (runs on a synthetic example by default).
+Build a call-type library from whistle contours (and, optionally, click detections) and classify new recordings with it. Python only. Notebook: `05_calltypes` (runs on a synthetic example by default).
 
 ## Steps
 1. **Contours** (`ContourParams`): points outside `fmin_hz`–`fmax_hz` are clipped off; contours shorter than `min_contour_s` are dropped; optional `min_snr_db` or `snr_top_frac`. Each contour is measured (duration, start/end/min/max/mean frequency, slopes, curvature, inflections, ...).
@@ -24,6 +24,25 @@ tree = {"name": "group", "column": "species", "groups": {"A": ["Dd", "Sco"], "B"
 pr = discover_pathway(pool, tree, DiscoverParams(), ReliabilityParams(unit="event_id"))
 lib = build_pathway_library(pr, contour_params, window_params, min_scores={"group": 0.05})
 ```
+
+## Feature choice
+Each detection type's features can be chosen (`DiscoverParams.features` / `EvalParams.features`: a list of keys from `windows.feature_catalog(detector)`; `freq_profile` stands for all frequency-profile bands). By default every whistle feature is used except the level-dependent SNR; for clicks the five inter-click interval features (the number of clicks is available but off). The library stores the columns used, so new data gets the same set. In the app: Settings → Advanced → *Features used*, with each feature's median and 5th–95th percentile in your windows, and per class.
+
+## Clicks, and combining detection types
+- **Click windows** (`clicks.py`, `ClickWindowParams`): sliding windows (default 10 s, 50 % overlap) over click times. Features: mean, median, SD, 5th and 95th percentile of the inter-click intervals, and the click count. Gaps longer than `max_ici_s` (default 1 s) are pauses between trains, not intervals; gaps shorter than `min_ici_s` are left out (e.g. echoes). Windows need `min_clicks` clicks. All clicks in a window are pooled.
+- **Input**: PAMGuard Click Detector binaries (`io.read_clicks`), or a CSV with `start` (Unix s or UTC date-time) and optional `duration` (s).
+- **Labels**: click windows take the labels of the labelled period (or, with call annotations, the event's first-to-last call) they fall in.
+- **Each type on its own**: whistles and clicks get their own windows, features, clusters and held-out tests, through every layer of the pathway. A class needn't exist in both.
+- **Merging** (`multiclass.merge_evidence`, `detectors.py`): per block and layer, each type's evidence for a class is its probability over the class's overall rate; the merged probabilities are the product of the evidence (each to the power of the type's weight, default 1), normalised. A class a type hasn't learned is neutral (×1) for that type; a block with only one type keeps that type's probabilities. The block is then decided as usual and goes down to the next layer. A rule that matches a type's block (e.g. "noise") removes that type's evidence; if no other type has evidence, the block takes the rule's decision.
+- **Held-out test**: each type's held-out windows are averaged per block and merged the same way (`merge_heldout`), so the app shows combined accuracy as well as each type's own.
+
+```python
+from speciesclassifiers.calltypes.detectors import build_multi_library, classify_multi
+lib = build_multi_library({"whistle": whistle_lib, "click": click_lib}, weights={"whistle": 1, "click": 1})
+windows, blocks = classify_multi({"whistle": whistles, "click": clicks}, lib)
+```
+
+Blocks have, per layer, the merged decision, score and probabilities, plus each type's own decision (`<layer>_whistle`, `<layer>_click`) and window counts.
 
 The yes/no tasks with majority-vote blocks (as in the killer whale example) remain available.
 
@@ -58,6 +77,7 @@ Operators: `<`, `<=`, `>`, `>=`, `==`, `!=`. Change a saved library's rules with
 
 ```
 python standalone.py library.json contours.json blocks.csv [windows.csv]
+python standalone.py library.json contours.json blocks.csv --clicks clicks.csv   # library with clicks ("-" = no contours)
 ```
 ```python
 import standalone

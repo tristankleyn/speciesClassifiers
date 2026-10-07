@@ -170,6 +170,24 @@ def check_contours(source, path):
     return r
 
 
+def check_clicks(source, path):
+    """Clicks: a folder of PAMGuard Click Detector binaries or a clicks CSV (``start``, optional ``duration``)."""
+    r = _result()
+    if not path or not Path(path).exists():
+        return _err(r, f"Not found: {path or '(no path)'}")
+    if source == "binaries":
+        return check_binaries(path, "click", r)
+    from .workflows import load_clicks
+    try:
+        cl = load_clicks("csv", path)
+    except Exception as e:
+        return _err(r, f"Couldn't read the clicks: {e}")
+    days = pd.to_datetime(cl["start"], unit="s", utc=True).dt.strftime("%Y-%m-%d")
+    r["messages"].append(("ok", f"{len(cl)} clicks on {days.nunique()} days ({days.min()} to {days.max()})."))
+    r["table"] = days.value_counts().sort_index().rename_axis("day").reset_index(name="clicks")
+    return r
+
+
 def check_annotations(lab):
     """Call annotations (CSV or annotation tables) or labelled periods: counts per label and day/event, and
     the label columns with their values (for building the classification)."""

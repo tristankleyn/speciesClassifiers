@@ -16,8 +16,11 @@ RANDOMFOREST = [
     ]),
 ]
 
+USE_WHISTLES = ("data.use_whistles", True)
+USE_CLICKS = ("data.use_clicks", True)
+
 CALLTYPES = [
-    ("Contours", [
+    ("Whistle contours", [
         {"key": "settings.contours.fmin_hz", "label": "Lowest frequency (Hz)", "kind": "number", "step": 100,
          "help": "contour points outside the band are clipped off"},
         {"key": "settings.contours.fmax_hz", "label": "Highest frequency (Hz)", "kind": "number", "step": 100},
@@ -26,7 +29,7 @@ CALLTYPES = [
         {"key": "settings.contours.min_snr_db", "label": "Minimum SNR (dB)", "kind": "number", "optional": True,
          "advanced": True, "help": "blank = no SNR filter"},
     ]),
-    ("Windows", [
+    ("Whistle windows", [
         {"key": "settings.windows.window_s", "label": "Window length (s)", "kind": "number", "step": 0.5, "min": 0.5},
         {"key": "settings.windows.overlap", "label": "Overlap (0-0.9)", "kind": "number", "step": 0.25, "min": 0,
          "max": 0.9},
@@ -39,6 +42,28 @@ CALLTYPES = [
          "step": 0.1, "advanced": True},
         {"key": "settings.windows.freq_profile_bins", "label": "Frequency profile bins", "kind": "int", "min": 0,
          "advanced": True},
+        {"key": "settings.features.whistle", "label": "Whistle features used", "kind": "features",
+         "detector": "whistle", "advanced": True},
+    ]),
+    ("Click windows", [
+        {"key": "settings.clicks.window_s", "label": "Window length (s)", "kind": "number", "step": 1, "min": 1,
+         "help": "clicks come in trains: longer windows than for whistles"},
+        {"key": "settings.clicks.overlap", "label": "Overlap (0-0.9)", "kind": "number", "step": 0.25, "min": 0,
+         "max": 0.9},
+        {"key": "settings.clicks.min_clicks", "label": "Min clicks per window", "kind": "int", "min": 2},
+        {"key": "settings.clicks.max_ici_s", "label": "Longest inter-click interval (s)", "kind": "number",
+         "step": 0.1, "min": 0.01, "advanced": True,
+         "help": "longer gaps are pauses between click trains, not intervals"},
+        {"key": "settings.clicks.min_ici_s", "label": "Shortest inter-click interval (s)", "kind": "number",
+         "step": 0.001, "min": 0, "advanced": True, "help": "shorter gaps (e.g. echoes) are left out"},
+        {"key": "settings.features.click", "label": "Click features used", "kind": "features",
+         "detector": "click", "advanced": True},
+    ]),
+    ("Combining whistles and clicks", [
+        {"key": "decision.weights.whistle", "label": "Weight of whistles", "kind": "number", "step": 0.25, "min": 0,
+         "also": USE_WHISTLES, "help": "1 = full say; 0 = ignored when clicks are there too"},
+        {"key": "decision.weights.click", "label": "Weight of clicks", "kind": "number", "step": 0.25, "min": 0,
+         "also": USE_WHISTLES},
     ]),
     ("Discovery (clustering)", [
         {"key": "settings.discover.cosine_threshold", "label": "Cluster breadth (cosine threshold)", "kind": "number",
@@ -129,10 +154,32 @@ DELPHINID = [
     ]),
 ]
 
+def _ct_defaults():
+    from speciesclassifiers.project.workflows import ct_defaults
+    return ct_defaults()
+
+
+_CT_DEFAULTS = _ct_defaults()
+for _title, _specs in CALLTYPES:      # whistle settings only with whistles, click settings only with clicks
+    for _s in _specs:
+        from speciesclassifiers.project.project import get_path as _gp
+        if _s.get("kind") != "features" and _gp(_CT_DEFAULTS, _s["key"]) is not None:
+            _s.setdefault("default", _gp(_CT_DEFAULTS, _s["key"]))     # shown for projects made before the setting
+        if _title.startswith("Whistle"):
+            _s.setdefault("when", USE_WHISTLES)
+        elif _title.startswith(("Click", "Combining")):
+            _s.setdefault("when", USE_CLICKS)
+
 SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID}
+# values of keys that older projects may not have yet
+CONDITION_DEFAULTS = {"data.use_whistles": True, "data.use_clicks": False}
 
 
 def applies(spec, cfg):
     """Whether a field applies to the current settings (``when`` / ``also``: (dotted key, value))."""
     from speciesclassifiers.project.project import get_path
-    return all(get_path(cfg, k) == v for k, v in [c for c in (spec.get("when"), spec.get("also")) if c])
+
+    def val(k):
+        v = get_path(cfg, k)
+        return CONDITION_DEFAULTS.get(k) if v is None else v
+    return all(val(k) == v for k, v in [c for c in (spec.get("when"), spec.get("also")) if c])

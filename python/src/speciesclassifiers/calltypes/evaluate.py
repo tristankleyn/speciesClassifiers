@@ -26,6 +26,7 @@ class EvalParams:
     max_per_class_per_day cap per class and day, so one long encounter can't dominate (None = off)
     min_class_n           drop classes with fewer windows
     exclude_features      feature names containing any of these are not used (e.g. level-dependent ones)
+    features              the chosen feature keys (see ``windows.feature_catalog``); None = all not excluded
     cv_grouping           "auto" (day if every class spans >= 2 days and there are >= 3 days, else time
                           block), "day" or "block"
     block_min             time-block length (min) for block grouping
@@ -40,6 +41,7 @@ class EvalParams:
     max_per_class_per_day: int = 150
     min_class_n: int = 8
     exclude_features: list = field(default_factory=lambda: ["amplitude", "snr", "signal", "noise", "mean_width"])
+    features: list = None
     cv_grouping: str = "auto"
     block_min: int = 10
     rf_trees: int = 300
@@ -66,12 +68,19 @@ def select_rows(windows, params: EvalParams):
     return w.reset_index(drop=True)
 
 
-def fit_feature_spec(windows, exclude_features=()):
+def fit_feature_spec(windows, exclude_features=(), features=None):
     """Learn the feature transform: which columns, fill values for missing values, which columns get
-    log1p. Stored in the library so new windows are transformed identically."""
+    log1p. Stored in the library so new windows are transformed identically. ``features``: the chosen
+    feature keys (see ``windows.feature_catalog``); None = every numeric column not excluded."""
+    from .windows import feature_columns
     cols = [c for c in windows.columns if c not in WINDOW_META and pd.api.types.is_numeric_dtype(windows[c])
-            and not pd.api.types.is_bool_dtype(windows[c])
-            and not any(x.lower() in c.lower() for x in exclude_features)]
+            and not pd.api.types.is_bool_dtype(windows[c])]
+    if features is not None:
+        cols = feature_columns(cols, features)
+        if not cols:
+            raise ValueError("None of the chosen features are in the windows.")
+    else:
+        cols = [c for c in cols if not any(x.lower() in c.lower() for x in exclude_features)]
     X = windows[cols].astype(float)
     std_cols = [c for c in cols if c.endswith("_std")]
     X[std_cols] = X[std_cols].fillna(0)          # one contour in the window -> spread 0
@@ -95,8 +104,8 @@ def apply_feature_spec(windows, spec):
     return X
 
 
-def feature_matrix(windows, exclude_features=()):
-    return apply_feature_spec(windows, fit_feature_spec(windows, exclude_features))
+def feature_matrix(windows, exclude_features=(), features=None):
+    return apply_feature_spec(windows, fit_feature_spec(windows, exclude_features, features))
 
 
 def cv_groups(windows, params: EvalParams):
@@ -128,7 +137,7 @@ def evaluate(windows, params: EvalParams = None):
     params = params or EvalParams()
     w = windows
     y = w["label"].to_numpy()
-    X = feature_matrix(w, params.exclude_features)
+    X = feature_matrix(w, params.exclude_features, params.features)
     labels = sorted(np.unique(y))
     res = {"n_windows": len(y), "n_classes": len(labels), "n_features": X.shape[1],
            "class_counts": w["label"].value_counts().to_dict()}

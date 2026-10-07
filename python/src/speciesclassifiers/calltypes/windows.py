@@ -246,3 +246,47 @@ def label_windows_by_overlap(windows, calls, column, out_col=None, value_map=Non
         strong = s - weak
         w.at[i, out_col] = (mixed if len(strong) > 1 else next(iter(strong)) if strong else sorted(s)[0])
     return w
+
+
+# ------------------------------------------------------------------------ feature choice ---
+PARAM_LABELS = {"duration_s": "duration", "start_freq_hz": "start frequency", "end_freq_hz": "end frequency",
+                "min_freq_hz": "minimum frequency", "max_freq_hz": "maximum frequency",
+                "freq_range_hz": "frequency range", "mean_freq_hz": "mean frequency",
+                "std_freq_hz": "frequency SD", "linreg_slope_hz_s": "slope", "quad_curvature": "curvature",
+                "mean_abs_slope_hz_s": "mean absolute slope", "frac_up": "share rising",
+                "frac_down": "share falling", "n_inflections": "inflections",
+                "time_of_min_freq_rel": "time of minimum frequency", "time_of_max_freq_rel": "time of maximum frequency"}
+PROFILE_KEY = "freq_profile"
+
+
+def feature_catalog(detector="whistle"):
+    """The features a detection type offers, as [{"key", "group", "label", "default"}]. A key is a window
+    column, except ``freq_profile`` (all ``prof_*`` columns). Level-dependent features (SNR) and the click
+    count are off by default."""
+    if detector == "click":
+        from .clicks import CLICK_FEATURES
+        return [{"key": k, "group": g, "label": lab, "default": d} for k, (g, lab, d) in CLICK_FEATURES.items()]
+    out = [{"key": "n_contours", "group": "Window", "label": "number of contours", "default": True},
+           {"key": "tonal_s", "group": "Window", "label": "seconds of contour", "default": True},
+           {"key": "occupancy", "group": "Window", "label": "share of the window with contour", "default": True}]
+    for suffix, group in (("_mean", "Mean over contours"), ("_std", "Spread (SD) over contours")):
+        out += [{"key": p + suffix, "group": group, "label": PARAM_LABELS[p], "default": True} for p in AGG_PARAMS]
+    out += [{"key": "lc_" + p, "group": "Longest contour", "label": PARAM_LABELS[p], "default": True}
+            for p in AGG_PARAMS]
+    out += [{"key": k, "group": "Contour points", "label": lab, "default": True} for k, lab in (
+        ("pts_mean_freq_hz", "mean frequency"), ("pts_std_freq_hz", "frequency SD"),
+        ("pts_q10_hz", "10th percentile frequency"), ("pts_q90_hz", "90th percentile frequency"))]
+    out += [{"key": PROFILE_KEY, "group": "Frequency profile", "label": "share of contour points per frequency band",
+             "default": True},
+            {"key": "snr_db_mean", "group": "Level (depends on distance)", "label": "mean SNR", "default": False}]
+    return out
+
+
+def default_features(detector="whistle"):
+    return [f["key"] for f in feature_catalog(detector) if f["default"]]
+
+
+def feature_columns(columns, features):
+    """The window columns that the chosen feature keys stand for."""
+    keys = set(features)
+    return [c for c in columns if c in keys or (PROFILE_KEY in keys and c.startswith("prof_"))]

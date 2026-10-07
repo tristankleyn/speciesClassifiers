@@ -49,6 +49,8 @@ def field(saver, spec):
     options, optional (blank = None)."""
     key, label, kind = spec["key"], spec["label"], spec.get("kind", "number")
     val = get_path(saver.project.config(), key)
+    if val is None and spec.get("default") is not None:
+        val = spec["default"]
     tip = spec.get("help", "")
 
     def save(e, conv=lambda v: v):

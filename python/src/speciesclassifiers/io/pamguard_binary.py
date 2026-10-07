@@ -139,10 +139,11 @@ def _load(path):
     return _pypamguard().load_pamguard_binary_file(str(path))
 
 
-def read_clicks(folder, periods=None, sample_rate=None, pattern=CLICK_PATTERN, progress=True):
+def read_clicks(folder, periods=None, sample_rate=None, pattern=CLICK_PATTERN, progress=True, keep_wave=True):
     """Read click detections from all click binaries under ``folder``.
 
     ``periods``: optional (start, end) Unix-s pairs to limit which files are read.
+    ``keep_wave=False`` leaves the waveforms out (``wave`` None) to save memory when only times are needed.
     Returns (clicks table, sample rate).
     """
     rows, rates = [], []
@@ -156,9 +157,13 @@ def read_clicks(folder, periods=None, sample_rate=None, pattern=CLICK_PATTERN, p
             if sr:
                 rates.append(sr)
         for d in pf.data:
-            w = np.asarray(d.wave, float)
+            if keep_wave:
+                w = np.asarray(d.wave, float)
+                w = w[0] if w.ndim > 1 else w
+            else:
+                w = None
             rows.append({"start": d.millis / 1000.0, "sample_duration": d.sample_duration,
-                         "wave": w[0] if w.ndim > 1 else w, "uid": d.uid, "file": f.name})
+                         "wave": w, "uid": d.uid, "file": f.name})
         if progress and (k + 1) % 50 == 0:
             print(f"  read {k + 1}/{len(files)} files")
     sr = sample_rate or _consensus(rates, "sample rate")

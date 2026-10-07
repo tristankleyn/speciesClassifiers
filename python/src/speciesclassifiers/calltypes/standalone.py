@@ -18,6 +18,12 @@ Usage in Python:
     windows, blocks = classify(contours, lib, period=(t0, t1))   # every block in [t0, t1)
 From the command line (contours as a JSON list, optionally gzipped):
     python standalone.py library.json contours.json blocks.csv [windows.csv]
+
+Libraries with clicks (several detection types) take a dict of detections per type:
+    windows, blocks = classify({"whistle": contours, "click": clicks}, lib)
+where clicks are dicts with ``start`` (Unix s) and optional ``duration`` (s). From the command line, add the
+clicks as a CSV (``start``, optional ``duration``; optionally gzipped) and use "-" for no contours:
+    python standalone.py library.json contours.json blocks.csv [windows.csv] --clicks clicks.csv
 """
 
 import base64
@@ -297,7 +303,8 @@ def blocks_from_windows(windows, contours, lib, period=None):
         r = {"block_start": b / NS, "block_end": (b + blk) / NS, "n_windows": len(ws),
              "n_assigned": sum(1 for w in ws if w["cluster"] >= 0), "n_contours": len(cidx),
              "block_meanfreq_range_hz": float(max(mf) - min(mf)) if mf else None,
-             "block_median_abs_slope_hz_s": _median([w["mean_abs_slope_hz_s_mean"] for w in ws]) if ws else None,
+             "block_median_abs_slope_hz_s": _median([w.get("mean_abs_slope_hz_s_mean", np.nan) for w in ws])
+             if ws else None,
              "block_median_freq_hz": _median([w.get("pts_mean_freq_hz", np.nan) for w in ws]) if ws else None,
              "block_median_contour_s": float(np.median([contours[j]["p"]["duration_s"] for j in cidx]))
              if cidx else None}
@@ -390,8 +397,187 @@ def pathway_blocks(feats, contours, lib, period=None):
     return wins, blocks
 
 
+# ------------------------------------------------------------------------ clicks -----------
+def prepare_clicks(raw):
+    """Click dicts (``start``, optional ``duration``) -> sorted dicts with ``start``, ``end`` and ``p``."""
+    out = []
+    for c in raw:
+        t = float(c["start"])
+        if not np.isfinite(t):
+            continue
+        d = c.get("duration")
+        d = 0.0 if d is None or d == "" or not np.isfinite(float(d)) else float(d)
+        out.append({"start": t, "end": t + d, "p": {"mean_freq_hz": np.nan, "duration_s": d}})
+    order = np.argsort(np.array([c["start"] for c in out]), kind="stable")
+    return [out[i] for i in order]
+
+
+def click_windows(clicks, cwp):
+    """Sliding windows over prepared clicks with their inter-click interval features."""
+    L, step = cwp["window_s"], cwp["window_s"] * (1 - cwp["overlap"])
+    days = {}
+    for i, c in enumerate(clicks):
+        days.setdefault(_day(c["start"]), []).append(i)
+    out = []
+    for day in sorted(days):
+        idx = np.array(days[day])
+        t = np.array([clicks[i]["start"] for i in idx])
+        t0 = np.floor(t.min() / 60) * 60
+        k = np.unique(np.concatenate([np.floor((t - t0) / step).astype(int) - j for j in range(int(np.ceil(L / step)))]))
+        for s in t0 + k[k >= 0] * step:
+            a, b = np.searchsorted(t, s, "left"), np.searchsorted(t, s + L, "left")
+            if b - a < max(cwp["min_clicks"], 2):
+                continue
+            d = np.diff(t[a:b])
+            d = d[(d <= cwp["max_ici_s"]) & (d > cwp.get("min_ici_s", 0.0))]
+            if not len(d):
+                continue
+            out.append({"w_start": float(s), "w_end": float(s + L), "day": day, "n_clicks": int(b - a),
+                        "n_intervals": len(d), "ici_mean_s": float(d.mean()), "ici_median_s": float(np.median(d)),
+                        "ici_std_s": float(d.std(ddof=1)) if len(d) > 1 else 0.0,
+                        "ici_p05_s": float(np.quantile(d, 0.05)), "ici_p95_s": float(np.quantile(d, 0.95)),
+                        "contour_idx": idx[a:b].tolist()})
+    return sorted(out, key=lambda w: w["w_start"])
+
+
+# ------------------------------------------------------------------------ several detection types ---
+def merge_evidence(rows, bases, weights=None):
+    """{detector: [class probabilities] or None}, {detector: {class: rate}} -> merged {class: p} or None.
+    Evidence p / rate multiplied over detectors (to the power of each weight; a class a detector doesn't know
+    is neutral); one detector with data keeps its probabilities."""
+    have = {d: p for d, p in rows.items() if p is not None and not all(np.isnan(v) for v in p.values())}
+    classes = list(dict.fromkeys(c for d in rows for c in (bases.get(d) or {})))
+    if not have:
+        return None
+    if len(have) == 1:
+        p = next(iter(have.values()))
+        return {c: float(np.nan_to_num(p.get(c, 0.0), nan=0.0)) for c in classes}
+    logev = np.zeros(len(classes))
+    for d, p in have.items():
+        for i, c in enumerate(classes):
+            v, base = p.get(c, np.nan), (bases.get(d) or {}).get(c)
+            if base is not None and v is not None and not np.isnan(v):
+                logev[i] += float((weights or {}).get(d, 1.0)) * np.log(max(v, 1e-9) / base)
+    ev = np.exp(logev - logev.max())
+    return dict(zip(classes, ev / ev.sum()))
+
+
+def detector_windows(det, raw, lib):
+    if det == "click":
+        ev = prepare_clicks(raw)
+        return click_windows(ev, lib["window_params"]), ev
+    contours = prepare_contours(raw, lib["contour_params"])
+    return window_features(make_windows(contours, lib["window_params"]), contours, lib["window_params"],
+                           lib["agg_params"]), contours
+
+
+def merged_blocks(feats, events, libs, weights=None, period=None):
+    """Blocks for one pathway layer (and those under it), merging the detection types. Same columns as
+    ``detectors.merged_blocks`` in the package."""
+    libs = {d: lb for d, lb in libs.items() if lb is not None and d in feats}
+    first = next(iter(libs.values()))
+    layer = first["layer"]["name"]
+    blk = int(round(first["block_minutes"] * 60 * NS))
+    task = first["tasks"][0]
+    per, bases, classes = {}, {}, []
+    for d, lb in libs.items():
+        _, bl = pathway_blocks(feats[d], events[d], {**lb, "children": {}}, period)
+        per[d] = {int(round(b["block_start"] * NS)): b for b in bl}
+        cl = lb["tasks"][0]["classes"]
+        classes += [c for c in cl if c not in classes]
+        bases[d] = lb.get("class_base") or {c: 1.0 / len(cl) for c in cl}
+    keys = sorted(set().union(*[set(v) for v in per.values()]))
+    out = []
+    for k in keys:
+        r = {"block_start": k / NS, "block_end": (k + blk) / NS}
+        rows, rule_then, rule_txt = {}, None, None
+        for d, lb in libs.items():
+            b = per[d].get(k)
+            r[f"n_windows_{d}"] = b["n_windows"] if b else 0
+            r[f"{layer}_{d}"] = b[layer] if b else "no_detections"
+            if b is None:
+                rows[d] = None
+            elif b.get("rule"):
+                rows[d] = None
+                if rule_then is None:
+                    rule_then, rule_txt = b[layer], f"{d}: {b['rule']}"
+            else:
+                rows[d] = {c: np.nan if b.get(f"{layer}_p_{c}") is None else b[f"{layer}_p_{c}"]
+                           for c in lb["tasks"][0]["classes"]}
+        m = merge_evidence(rows, bases, weights)
+        if m is None:
+            dec, score = (rule_then, None) if rule_then is not None else ("no_detections", None)
+        else:
+            dec, score = _decide(np.array([m[c] for c in classes]), classes, task.get("min_score", 0.0))
+        for c in classes:
+            r[f"{layer}_p_{c}"] = None if m is None else float(m[c])
+        r[f"{layer}_score"] = score
+        r[layer] = dec
+        r["rule"] = rule_txt if (m is None and rule_then is not None) else None
+        r["decision"] = dec
+        r["path"] = "" if (dec in ("uncertain", "no_detections") or r["rule"]) else dec
+        out.append(r)
+    groups = list(dict.fromkeys(g for lb in libs.values() for g in (lb.get("children") or {})))
+    for g in groups:
+        sel = {int(round(r["block_start"] * NS)) for r in out if r[layer] == g}
+        child = {d: (lb.get("children") or {}).get(g) for d, lb in libs.items()}
+        if not sel or all(v is None for v in child.values()):
+            continue
+        sub = {d: [f for f in fs if (int(np.round(f["w_start"] * 1e9)) // blk) * blk in sel] for d, fs in feats.items()}
+        by = {int(round(c["block_start"] * NS)): c for c in merged_blocks(sub, events, child, weights)}
+        for r in out:
+            c = by.get(int(round(r["block_start"] * NS)))
+            if r[layer] != g or c is None:
+                continue
+            for key, v in c.items():
+                if key in ("block_start", "block_end", "rule") or key.startswith("n_windows_"):
+                    continue
+                if key == "decision":
+                    if v not in ("uncertain", "no_detections", None):
+                        r["decision"] = v
+                elif key == "path":
+                    if v:
+                        r["path"] = f"{g} > {v}"
+                else:
+                    r[key] = v
+    return out
+
+
+def classify_multi(raw, lib, period=None):
+    """{detector: detections} -> ({detector: windows}, blocks) for a library with several detection types."""
+    feats, events, libs = {}, {}, {}
+    for d, lb in lib["detectors"].items():
+        if raw.get(d) is None:
+            continue
+        feats[d], events[d] = detector_windows(d, raw[d], lb)
+        libs[d] = lb
+    if not libs:
+        raise ValueError("No detections of the library's detection types: " + ", ".join(lib["detectors"]))
+    wins = {d: classify_windows(feats[d], libs[d]) for d in libs}
+    return wins, merged_blocks(feats, events, libs, lib.get("weights"), period)
+
+
+def read_clicks_csv(path):
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt", newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    out = []
+    for r in rows:
+        try:
+            t = float(r["start"])
+        except ValueError:
+            dt = datetime.fromisoformat(r["start"].strip().replace("Z", "+00:00"))
+            t = (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
+        out.append({"start": t, "duration": float(r["duration"]) if r.get("duration") not in (None, "") else 0.0})
+    return out
+
+
 def classify(raw_contours, lib, period=None):
-    """Contours -> (windows, blocks), as lists of dicts. See the module docstring."""
+    """Contours -> (windows, blocks), as lists of dicts. See the module docstring. For a library with several
+    detection types, pass {"whistle": contours, "click": clicks}; windows are then {detector: windows}."""
+    if lib.get("multi_detector"):
+        raw = raw_contours if isinstance(raw_contours, dict) else {"whistle": raw_contours}
+        return classify_multi(raw, lib, period)
     contours = prepare_contours(raw_contours, lib["contour_params"])
     feats = window_features(make_windows(contours, lib["window_params"]), contours, lib["window_params"],
                             lib["agg_params"])
@@ -412,14 +598,31 @@ def write_csv(rows, path, drop=("contour_idx",)):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 4:
+    args = sys.argv[1:]
+    clicks_path = None
+    if "--clicks" in args:
+        i = args.index("--clicks")
+        clicks_path = args[i + 1]
+        args = args[:i] + args[i + 2:]
+    if len(args) < 3:
         sys.exit(__doc__)
-    library = load_library(sys.argv[1])
-    opener = gzip.open if sys.argv[2].endswith(".gz") else open
-    with opener(sys.argv[2], "rt") as fh:
-        data = json.load(fh)
-    win, blk_rows = classify(data, library)
-    write_csv(blk_rows, sys.argv[3])
-    if len(sys.argv) > 4:
-        write_csv(win, sys.argv[4])
-    print(f"{len(data)} contours -> {len(win)} windows -> {len(blk_rows)} blocks")
+    library = load_library(args[0])
+    data = None
+    if args[1] != "-":
+        opener = gzip.open if args[1].endswith(".gz") else open
+        with opener(args[1], "rt") as fh:
+            data = json.load(fh)
+    if library.get("multi_detector"):
+        raw_in = {"whistle": data, "click": read_clicks_csv(clicks_path) if clicks_path else None}
+        win, blk_rows = classify(raw_in, library)
+        if len(args) > 3:
+            for det, rows_ in win.items():
+                write_csv(rows_, args[3] if det == "whistle" else args[3].replace(".csv", f"_{det}.csv"))
+        n_win = ", ".join(f"{len(v)} {k} windows" for k, v in win.items())
+    else:
+        win, blk_rows = classify(data, library)
+        if len(args) > 3:
+            write_csv(win, args[3])
+        n_win = f"{len(win)} windows"
+    write_csv(blk_rows, args[2])
+    print(f"{n_win} -> {len(blk_rows)} blocks")

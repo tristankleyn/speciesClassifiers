@@ -125,6 +125,7 @@ def build_pathway_library(pr, contour_params, window_params, block_minutes=10, r
     ms = {node["name"]: (min_scores or {}).get(node["name"], node.get("min_score", 0.0))}
     lib = build_library(pr["result"], contour_params, window_params, [task], block_minutes=block_minutes,
                         rules=rules if not pr["path"] else None, name=name, min_scores=ms)
+    lib["class_base"] = {c: float(v) for c, v in pr["result"]["multiclass"][node["name"]]["base"].items()}
     lib["layer"] = {"name": node["name"], "column": node["column"], "groups": node.get("groups"),
                     "path": pr["path"]}
     lib["children"] = {g: build_pathway_library(c, contour_params, window_params, block_minutes, None, name,

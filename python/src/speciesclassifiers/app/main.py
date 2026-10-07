@@ -445,21 +445,61 @@ def data_panel(p, saver, kind):
         ui.button("Check data", icon="fact_check", on_click=check)
         out = ui.column().classes("w-full")
     else:
-        ui.markdown("#### Whistle contours\nA folder of PAMGuard **Whistle and Moan Detector** binary files "
-                    "(searched in subfolders too), or a contours JSON file (the format of the example data).")
-        ui.select({"binaries": "PAMGuard binaries (folder)", "json": "Contours JSON (.json or .json.gz)"},
-                  value=saver.get("data.source"), label="Source",
-                  on_change=lambda e: saver.set("data.source", e.value)).classes("w-96")
-        path_row(saver, "data.path", "Folder or file", "any", (".json", ".gz"))
-        async def check():
-            out.clear()
-            with out:
-                ui.spinner()
-            d = saver.project.config()["data"]
+        ct_data_panel(p, saver)
+
+
+def ct_data_panel(p, saver):
+    ui.markdown("#### Detections\nWhistles, clicks or both. Each detection type gets its own windows, "
+                "measurements and clusters; their class probabilities are combined for each decision block.")
+    with ui.row().classes("gap-6"):
+        ui.checkbox("Whistles", value=saver.get("data.use_whistles", True),
+                    on_change=lambda e: (saver.set("data.use_whistles", e.value), body.refresh()))
+        ui.checkbox("Clicks", value=saver.get("data.use_clicks", False), on_change=lambda e: set_clicks(e.value))
+
+    def set_clicks(on):
+        saver.set("data.use_clicks", on)
+        d = saver.project.config()["data"]
+        if on and not d.get("click_path") and d.get("source") == "binaries" and d.get("path"):
+            saver.set("data.click_path", d["path"])       # usually the same binaries folder
+            saver.set("data.click_source", "binaries")
+        body.refresh()
+
+    async def check(kind_, out):
+        out.clear()
+        with out:
+            ui.spinner()
+        d = saver.project.config()["data"]
+        if kind_ == "whistle":
             r = await run.io_bound(checks.check_contours, d["source"], d["path"])
-            show_check(out, r)
-        ui.button("Check contours", icon="fact_check", on_click=check)
-        out = ui.column().classes("w-full")
+        else:
+            r = await run.io_bound(checks.check_clicks, d.get("click_source", "binaries"), d.get("click_path", ""))
+        show_check(out, r)
+
+    @ui.refreshable
+    def body():
+        d = saver.project.config()["data"]
+        if not d.get("use_whistles", True) and not d.get("use_clicks"):
+            ui.label("Choose at least one detection type.").classes("text-amber-700")
+        if d.get("use_whistles", True):
+            ui.markdown("##### Whistle contours\nA folder of PAMGuard **Whistle and Moan Detector** binary files "
+                        "(searched in subfolders too), or a contours JSON file (the format of the example data).")
+            ui.select({"binaries": "PAMGuard binaries (folder)", "json": "Contours JSON (.json or .json.gz)"},
+                      value=d.get("source"), label="Source",
+                      on_change=lambda e: saver.set("data.source", e.value)).classes("w-96")
+            path_row(saver, "data.path", "Folder or file", "any", (".json", ".gz"))
+            ui.button("Check contours", icon="fact_check", on_click=lambda: check("whistle", wout))
+            wout = ui.column().classes("w-full")
+        if d.get("use_clicks"):
+            ui.markdown("##### Clicks\nA folder of PAMGuard **Click Detector** binary files (often the same folder "
+                        "as the whistles), or a CSV with a `start` column (UTC; Unix seconds or date-time) and "
+                        "optionally `duration` (s).")
+            ui.select({"binaries": "PAMGuard binaries (folder)", "csv": "Clicks CSV (.csv or .csv.gz)"},
+                      value=d.get("click_source", "binaries"), label="Source",
+                      on_change=lambda e: saver.set("data.click_source", e.value)).classes("w-96")
+            path_row(saver, "data.click_path", "Folder or file", "any", (".csv", ".gz"))
+            ui.button("Check clicks", icon="fact_check", on_click=lambda: check("click", cout))
+            cout = ui.column().classes("w-full")
+    body()
 
 
 def labels_panel(p, saver):
@@ -598,11 +638,18 @@ def settings_panel(saver, kind):
         adv = [s for s in specs if s.get("advanced")]
         ui.label(title).classes("text-base font-medium mt-2")
         for s in basic:
-            field(saver, s)
+            _setting(saver, s)
         if adv:
             with ui.expansion("Advanced", icon="tune").classes("w-full"):
                 for s in adv:
-                    field(saver, s)
+                    _setting(saver, s)
+
+
+def _setting(saver, spec):
+    if spec.get("kind") == "features":
+        from .features_ui import features_field
+        return features_field(saver, spec)
+    return field(saver, spec)
 
 
 # ------------------------------------------------------------------------ run ---------------------

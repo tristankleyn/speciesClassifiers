@@ -23,6 +23,10 @@ Annotation tables (one row per selection, with begin/end times relative to a rec
 - From PAMGuard binaries: `io.read_whistles(folder)` gives one row per contour: `start` (Unix s), `duration`, `times` (s, per slice), `freqs` (Hz, per slice), `slice_s`, `snr_db`, `amplitude_db`, `uid`, `file`. The detector's sample rate and FFT settings are worked out from the files.
 - As JSON (`examples/contours_example_synthetic.json.gz`, the input of `calltypes/standalone.py`): a list of `{"start", "times", "freqs", "slice_s", "snr_db" (optional)}`.
 
+## Clicks
+- From PAMGuard binaries: `io.read_clicks(folder, keep_wave=False)` gives `start` (Unix s), `duration` (s), `uid`, `file` (and the waveform with `keep_wave=True`).
+- As CSV (`examples/clicks_example_synthetic.csv.gz`; call types and `standalone.py --clicks`): `start` (Unix s, or a UTC date-time) and optional `duration` (s).
+
 ## Detection frames (`examples/frames_example_synthetic.csv`)
 delphinID model inputs, one row per frame: `event_id`, `frame_start`, `n_detections`, `density` (whistles), `label`, and the input bins `f1`, `f2`, .... The acoustic parameters that made them are saved next to them (`*_params.json`).
 
@@ -33,7 +37,7 @@ One row per detection with numeric features, a label column and a group column (
 Every classifier writes predictions in one long format (one row per detection × class): see [schemas/classifier_output.md](../schemas/classifier_output.md).
 
 ## Call-type library (JSON)
-Written by `calltypes.save_library`; everything needed to classify new contours:
+Written by `calltypes.save_library`; everything needed to classify new contours (with several detection types: `multi_detector`, `weights` and one pathway library per type under `detectors`):
 - `contour_params`, `window_params`: filters and window settings
 - `feature_spec`: feature columns, fill values, log-transformed columns, standardisation (`mean`, `scale`)
 - `weights`: feature weights of the cosine distance
