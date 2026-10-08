@@ -81,10 +81,60 @@ def frame_table(frames, preds, acoustic: AcousticParams, sample_rate=None):
     meas = spectrum_measures(f[feats].to_numpy(float), bin_centres(acoustic, sample_rate, len(feats)),
                              acoustic.voc_type)
     keep = ["detection_id", "frame_start"] + [c for c in ("n_detections", "density") if c in f]
-    f = pd.concat([f[keep].reset_index(drop=True), meas], axis=1).drop_duplicates("detection_id")
+    f = pd.concat([f[keep + feats].reset_index(drop=True), meas], axis=1).drop_duplicates("detection_id")
     out = out.merge(f, on="detection_id", how="left")
     out.attrs["classes"] = classes
+    out.attrs["features"] = feats                   # the frame's model inputs (spectrum), f1..fN
+    out.attrs["freqs"] = [float(x) for x in bin_centres(acoustic, sample_rate, len(feats))]
     return out
+
+
+def plot_frame_confusion(frames, classes, feats, freqs, fig=None, max_lines=3000, seed=0):
+    """'Frame confusion matrix': a grid of true (rows) x predicted (columns) cells, each overlaying the input
+    spectra of its frames (frequency vs normalised amplitude), with the same axes in every cell. Correct
+    frames (diagonal) dark blue, others light grey. Cells with many frames show a random ``max_lines`` of
+    them (the count shown is the full count)."""
+    from matplotlib.collections import LineCollection
+    from matplotlib.figure import Figure
+    k = len(classes)
+    fig = fig or Figure(figsize=(1.9 * k + 1.0, 1.5 * k + 0.9))
+    axes = np.atleast_2d(fig.subplots(k, k, sharex=True, sharey=True, squeeze=False))
+    X = frames[feats].to_numpy(float)
+    x = np.asarray(freqs, float) / 1000.0
+    ymax = float(np.nanquantile(X, 0.999)) if X.size else 1.0
+    ymin = min(0.0, float(np.nanmin(X))) if X.size else 0.0
+    true, pred = frames["true_class"].astype(str).to_numpy(), frames["predicted"].astype(str).to_numpy()
+    rng = np.random.default_rng(seed)
+    for i, ti in enumerate(classes):
+        for j, pj in enumerate(classes):
+            ax = axes[i, j]
+            idx = np.where((true == ti) & (pred == pj))[0]
+            n = len(idx)
+            if n > max_lines:
+                idx = rng.choice(idx, max_lines, replace=False)
+            if n:
+                segs = np.stack([np.broadcast_to(x, (len(idx), len(x))), X[idx]], axis=2)
+                alpha = float(np.clip(15.0 / len(idx), 0.015, 0.5))
+                ax.add_collection(LineCollection(segs, colors="#0b3d91" if i == j else "#b0b0b0",
+                                                 linewidths=0.6, alpha=alpha))
+            ax.text(0.97, 0.93, str(n), transform=ax.transAxes, ha="right", va="top", fontsize=6,
+                    color="#0b3d91" if i == j else "#555555")
+            ax.set_xlim(x.min(), x.max())
+            ax.set_ylim(ymin, ymax * 1.02)
+            ax.tick_params(labelsize=5, length=2, pad=1)
+            ax.locator_params(axis="x", nbins=3)
+            ax.locator_params(axis="y", nbins=2)
+            if i == 0:
+                ax.set_title(f"→ {pj}", fontsize=7)
+            if j == 0:
+                ax.set_ylabel(ti, fontsize=7, rotation=0, ha="right", va="center", labelpad=10)
+            for sp in ax.spines.values():
+                sp.set_linewidth(0.4)
+    fig.supxlabel("Frequency (kHz)", fontsize=7)
+    fig.suptitle("Frame confusion matrix: input spectra of kept frames\nrows: true class · columns: predicted · "
+                 "y: normalised amplitude · number: frames in the cell", fontsize=8)
+    fig.subplots_adjust(wspace=0.08, hspace=0.12, top=1 - 0.75 / fig.get_figheight())
+    return fig
 
 
 def apply_filters(t, frame_filters=None, event_filters=None):

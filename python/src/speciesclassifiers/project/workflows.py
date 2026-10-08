@@ -1310,14 +1310,18 @@ def dl_frame_predictions(frames, probs, classes, acoustic, sample_rate=None):
     for c in ("n_detections", "density", "file"):
         if c in frames:
             out[c] = frames[c].to_numpy()
-    meas = spectrum_measures(frames[feats].to_numpy(float), bin_centres(acoustic, sample_rate, len(feats)),
-                             acoustic.voc_type)
+    freqs = bin_centres(acoustic, sample_rate, len(feats))
+    X = frames[feats].to_numpy(float)
+    meas = spectrum_measures(X, freqs, acoustic.voc_type)
     out = pd.concat([out, meas.reset_index(drop=True)], axis=1)
     for k, c in enumerate(classes):
         out[f"p_{c}"] = P[:, k]
     out["predicted"] = np.array(classes)[P.argmax(1)]
     out["confidence"] = srt[:, -1]
     out["score"] = srt[:, -1] * (srt[:, -1] - (srt[:, -2] if P.shape[1] > 1 else 0))
+    # the frame's whole input (normalised amplitude per frequency bin), named by the bin's centre frequency
+    amp = pd.DataFrame(X, columns=[f"amp_{f:.0f}Hz" for f in freqs])
+    out = pd.concat([out, amp], axis=1)
     return out.sort_values("frame_start", kind="mergesort").reset_index(drop=True)
 
 

@@ -40,11 +40,13 @@ Results → **Advanced diagnostics** opens a page over the held-out (cross-valid
 - **Event filters** (minimum kept frames, minimum event score or confidence) leave events undecided.
 - The page shows frames kept and events decided, frame and event accuracy (kept / decided only), confusion matrices, per-class results, the events, and the distribution of any measurement for correct and wrong frames, with the filtered-out range greyed.
 
+At the bottom, **Show the frame confusion matrix** draws a grid of true (rows) × predicted (columns) classes in which each cell overlays the input spectra of its kept frames (frequency vs normalised amplitude, same axes in every cell, faint lines so the overlay shows their spread; correct frames on the diagonal dark blue, others light grey; the number is the frames in the cell).
+
 Filters are saved with the project; they don't change the model. With several detection types, switch between them at the top.
 
 ## Classify new data (one detection type)
 The last step, **Classify new data · export**, takes a folder of PAMGuard binaries of the detection type the model was trained on (Whistle and Moan Detector or Click Detector), optionally limited to a date range. Frames are made with the training settings and the model zip classifies every frame (as PAMGuard would), at the training resolution (e.g. 4 s frames).
 
-`apply/frame_predictions.csv` has one row per frame with everything about it: start and end (Unix s and UTC), the day, detections (contours or clicks) in the frame, whistle density, the spectrum values (peak, lowest and highest frequency with energy, span), each class's probability, the prediction, confidence and score. `apply/frame_predictions_standard.csv` has the same predictions in the standard classifier output format.
+`apply/frame_predictions.csv` has one row per frame with everything about it: start and end (Unix s and UTC), the day, detections (contours or clicks) in the frame, whistle density, the spectrum values (peak, lowest and highest frequency with energy, span), each class's probability, the prediction, confidence and score, and at the end of the row the frame's whole input: the normalised amplitude of each frequency bin (`amp_<centre frequency>Hz`). `apply/frame_predictions_standard.csv` has the same predictions in the standard classifier output format.
 
 Afterwards, on the same screen and without rerunning: drop frames below a minimum whistle density (0–2) or number of contours / clicks (1–100), and group the kept frames into clock-aligned blocks (1 min to 1 hour), each taking the mean of its frames' probabilities. A block is `uncertain` with fewer than the minimum frames or a score (top probability × lead over the second) below the minimum. The view shows frames kept, blocks per decision, a presence timeline and the tables; **Save blocks CSV** writes `apply/blocks.csv` with the current choices (saved with the project).

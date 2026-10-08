@@ -122,6 +122,10 @@ def test_delphinid_diagnostics():
     assert s["frames_kept"] < len(t) and (k["confidence"] >= 0.7).all()
     assert s["frame_accuracy"] >= s_all["frame_accuracy"] and s["events_decided"] < 18
     assert s["frame_confusion"].to_numpy().sum() == s["frames_kept"]
+    from speciesclassifiers.delphinid.diagnostics import plot_frame_confusion
+    fig = plot_frame_confusion(k, t.attrs["classes"], t.attrs["features"], t.attrs["freqs"])
+    axes = fig.get_axes()
+    assert len(axes) == 9 and axes[0].get_xlim() == axes[8].get_xlim() and axes[0].get_ylim() == axes[5].get_ylim()
 
 
 def test_delphinid_classify_new_single(tmp_path):
@@ -148,6 +152,9 @@ def test_delphinid_classify_new_single(tmp_path):
     assert len(f) == 457 and {"start_utc", "end_utc", "n_detections", "density", "peak_freq_hz", "p_SpA",
                               "predicted", "confidence"} <= set(f.columns)
     assert np.allclose(f["frame_end"] - f["frame_start"], 4.0)
+    amp = [c for c in f.columns if c.startswith("amp_")]
+    assert len(amp) == 90 and amp[0] == "amp_2100Hz" and f.columns[-1] == amp[-1]
+    assert np.allclose(f[amp].sum(axis=1), 1, atol=1e-4)
     b = dl_blocks(f, block_minutes=5)
     assert len(b) >= 18 and {"decision", "n_frames", "p_SpA", "start_utc"} <= set(b.columns)
     b2 = dl_blocks(f, block_minutes=5, min_density=0.8, min_detections=3)

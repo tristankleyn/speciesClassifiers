@@ -191,7 +191,17 @@ async def diagnostics_page(path: str, type: str = ""):  # noqa: A002 (query para
                     "n_frames_all", "kept_share"]
             with ui.expansion("Events", icon="table_rows").classes("w-full"):
                 table(evs[cols].sort_values(["decided", "correct", "score"]).round(3), rows=15)
+            with ui.row().classes("items-center gap-3 mt-2"):
+                ui.switch("Show the frame confusion matrix", value=show_fcm["on"],
+                          on_change=lambda e: (show_fcm.update(on=e.value), kick()))
+                ui.label("each cell overlays the input spectra of the kept frames of that true / predicted "
+                         "class (diagonal = correct, blue)").classes("text-xs text-gray-500")
+            s4 = ImageSlot("w-full max-w-5xl") if show_fcm["on"] else None
         await redraw_hist()
+        if s4:
+            from speciesclassifiers.delphinid.diagnostics import plot_frame_confusion
+            await s4.fill(lambda: plot_frame_confusion(kept, classes, t.attrs["features"], t.attrs["freqs"]))
 
     hist_col = {"c": "confidence" if "confidence" in measures else next(iter(measures))}
+    show_fcm = {"on": False}
     await refresh()
