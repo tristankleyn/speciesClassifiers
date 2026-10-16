@@ -21,7 +21,8 @@ dependencies = [
 delphinid = ["tensorflow>=2.16"]
 pamguard = ["pypamguard"]
 notebooks = ["jupyter", "matplotlib"]
-app = ["nicegui>=2.0", "matplotlib", "pypamguard"]
+annotate = ["umap-learn"]
+app = ["nicegui>=2.0", "matplotlib", "pypamguard", "umap-learn"]
 dev = ["pytest"]
 
 [project.scripts]

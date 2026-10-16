@@ -306,7 +306,49 @@ def _dl_defaults():
 
 _fill_defaults(DELPHINID, _dl_defaults())
 
-SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID}
+def cluster_specs(det):
+    """Clustering settings of one detection type (also shown on the map page)."""
+    k = f"settings.cluster.{det}"
+    return [
+        {"key": f"{k}.min_cluster_size", "label": "Smallest cluster (windows)", "kind": "int", "min": 2,
+         "help": "larger = fewer, bigger clusters"},
+        {"key": f"{k}.min_samples", "label": "Neighbourhood density", "kind": "int", "min": 0,
+         "help": "0 = same as the smallest cluster; larger = more windows left unclustered"},
+        {"key": f"{k}.selection", "label": "Cluster selection", "kind": "select",
+         "options": {"eom": "fewer, larger clusters", "leaf": "more, finer clusters"}},
+        {"key": f"{k}.n_neighbors", "label": "Map neighbours (UMAP)", "kind": "int", "min": 2,
+         "help": "larger = more global structure; smaller = more local detail"},
+        {"key": f"{k}.min_dist", "label": "Map spacing (UMAP min distance)", "kind": "number", "step": 0.05,
+         "min": 0, "max": 1, "help": "0 = tight clumps"},
+        {"key": f"{k}.pca_variance", "label": "PCA variance kept (0-1)", "kind": "number", "step": 0.05,
+         "min": 0.5, "max": 1, "advanced": True},
+        {"key": f"{k}.cluster_dims", "label": "Cluster in dimensions", "kind": "int", "min": 2, "max": 20,
+         "advanced": True, "help": "2 = on the map itself; more = a separate UMAP for clustering"},
+        {"key": f"{k}.metric", "label": "Distance", "kind": "select",
+         "options": {"euclidean": "Euclidean", "cosine": "cosine", "manhattan": "Manhattan"}, "advanced": True},
+        {"key": f"{k}.seed", "label": "Random seed", "kind": "int", "advanced": True},
+    ]
+
+
+import copy as _copy
+ANNOTATE = [_copy.deepcopy(g) for g in CALLTYPES if g[0] in ("Whistle contours", "Whistle windows", "Click windows",
+                                                               "Click spectrum")]
+for _g in ANNOTATE:
+    for _s in _g[1]:
+        if _s.get("kind") == "features":
+            _s.pop("advanced", None)
+ANNOTATE += [("Whistle clustering", [dict(s, when=USE_WHISTLES) for s in cluster_specs("whistle")]),
+             ("Click clustering", [dict(s, when=USE_CLICKS) for s in cluster_specs("click")])]
+
+
+def _an_defaults():
+    from speciesclassifiers.project.workflows import an_defaults
+    return an_defaults()
+
+
+_fill_defaults(ANNOTATE, _an_defaults())
+
+SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID, "annotate": ANNOTATE}
 # values of keys that older projects may not have yet
 CONDITION_DEFAULTS = {"data.use_whistles": True, "data.use_clicks": False, "decision.method": "multiply"}
 

@@ -1,0 +1,103 @@
+"""Map and clusters of windows: standardise the chosen features, PCA, UMAP to a 2-D map, HDBSCAN.
+
+Missing feature values (e.g. no inter-click interval) take the feature's median. PCA keeps the components
+that explain ``pca_variance`` of the variance (or ``pca_components`` of them). UMAP makes the 2-D map; the
+clusters are found by HDBSCAN on the map itself (``cluster_dims`` = 2: what you see is what is clustered) or
+on a separate UMAP with more dimensions (``cluster_dims`` > 2: often cleaner clusters, but they may look
+split or mixed on the map). Points HDBSCAN can't place are unclustered (-1).
+"""
+
+from dataclasses import asdict, dataclass
+
+import numpy as np
+import pandas as pd
+
+
+@dataclass
+class ClusterParams:
+    """Clustering settings.
+
+    pca_variance        share of variance the PCA components keep (0-1)
+    pca_components      number of PCA components instead (0 = use pca_variance)
+    n_neighbors         UMAP neighbours: larger = more global structure, smaller = more local detail
+    min_dist            UMAP minimum distance between points on the map (0 = tight clumps)
+    metric              UMAP distance ("euclidean", "cosine", "manhattan")
+    cluster_dims        dimensions HDBSCAN clusters in (2 = the map)
+    min_cluster_size    HDBSCAN smallest cluster (windows)
+    min_samples         HDBSCAN neighbourhood density (0 = same as min_cluster_size): larger = more unclustered
+    selection           HDBSCAN "eom" (fewer, larger clusters) or "leaf" (more, finer clusters)
+    seed                random seed (UMAP)
+    """
+
+    pca_variance: float = 0.95
+    pca_components: int = 0
+    n_neighbors: int = 15
+    min_dist: float = 0.05
+    metric: str = "euclidean"
+    cluster_dims: int = 2
+    min_cluster_size: int = 30
+    min_samples: int = 0
+    selection: str = "eom"
+    seed: int = 42
+
+    def to_dict(self):
+        return asdict(self)
+
+
+def feature_matrix(windows, cols):
+    """Standardised features (missing values: the column median; constant columns dropped)."""
+    X = windows[cols].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+    med = np.nanmedian(X, axis=0)
+    med = np.where(np.isfinite(med), med, 0.0)
+    X = np.where(np.isfinite(X), X, med)
+    sd = X.std(axis=0)
+    keep = sd > 0
+    return (X[:, keep] - X[:, keep].mean(axis=0)) / sd[keep], [c for c, k in zip(cols, keep) if k]
+
+
+def _umap(X, n, params, min_dist):
+    import sys
+    if "umap" not in sys.modules:          # don't let umap import TensorFlow (for ParametricUMAP, unused): slow
+        sys.modules.setdefault("umap.parametric_umap", None)
+    from umap import UMAP
+    return UMAP(n_components=n, n_neighbors=min(params.n_neighbors, len(X) - 1), min_dist=min_dist,
+                metric=params.metric, random_state=params.seed, n_jobs=1).fit_transform(X)
+
+
+def embed_and_cluster(windows, cols, params: ClusterParams = None):
+    """windows (one row per window, feature columns ``cols``) -> (DataFrame ``x, y, cluster`` in the windows'
+    order, info dict). Clusters are numbered 0.. by size (largest first); -1 = unclustered."""
+    from sklearn.cluster import HDBSCAN
+    from sklearn.decomposition import PCA
+    params = params or ClusterParams()
+    X, used = feature_matrix(windows, cols)
+    n = len(X)
+    if n < 5 or X.shape[1] == 0:
+        raise ValueError(f"Too few windows ({n}) or no varying features to cluster")
+    nc = params.pca_components or params.pca_variance
+    if isinstance(nc, float) and nc >= 1:
+        nc = None
+    if isinstance(nc, int):
+        nc = min(nc, X.shape[1], n)
+    pca = PCA(n_components=nc, svd_solver="full", random_state=params.seed).fit(X)
+    Z = pca.transform(X)
+    print(f"  {n} windows, {len(used)} features -> {Z.shape[1]} PCA components "
+          f"({pca.explained_variance_ratio_.sum():.0%} of the variance)")
+    print(f"  UMAP map (neighbours {params.n_neighbors}, min distance {params.min_dist})...")
+    xy = _umap(Z, 2, params, params.min_dist)
+    space = xy
+    if params.cluster_dims and params.cluster_dims > 2:
+        print(f"  UMAP to {params.cluster_dims} dimensions for clustering...")
+        space = _umap(Z, params.cluster_dims, params, 0.0)
+    mcs = max(2, min(params.min_cluster_size, n))
+    cl = HDBSCAN(min_cluster_size=mcs, min_samples=params.min_samples or None,
+                 cluster_selection_method=params.selection, copy=True).fit_predict(space)
+    order = pd.Series(cl[cl >= 0]).value_counts().index
+    remap = {old: new for new, old in enumerate(order)}
+    cl = np.array([remap.get(v, -1) for v in cl])
+    print(f"  HDBSCAN: {len(order)} clusters; {np.mean(cl < 0):.0%} of windows unclustered")
+    out = pd.DataFrame({"x": xy[:, 0], "y": xy[:, 1], "cluster": cl})
+    info = {"n_windows": n, "features": used, "pca_components": int(Z.shape[1]),
+            "pca_variance": float(pca.explained_variance_ratio_.sum()), "n_clusters": len(order),
+            "unclustered": float(np.mean(cl < 0)), "params": params.to_dict()}
+    return out, info

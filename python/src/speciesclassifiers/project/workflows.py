@@ -1453,4 +1453,94 @@ DELPHINID = Workflow(
     dl_defaults, dl_example)
 
 
-WORKFLOWS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID}
+# ============================================================================ cluster & label =======
+def an_defaults():
+    from speciesclassifiers.annotate import ClusterParams
+    c = ct_defaults()
+    cp = ClusterParams().to_dict()
+    s = {k: c["settings"][k] for k in ("contours", "windows", "clicks", "click_spectrum", "features")}
+    s["cluster"] = {"whistle": dict(cp), "click": dict(cp)}
+    return {"data": c["data"], "settings": s, "export": {"max_gap_s": 60.0, "min_windows": 1}}
+
+
+def an_example():
+    return {"data": {"source": "json", "path": str(EXAMPLES / "contours_example_synthetic.json.gz"),
+                     "use_clicks": True, "click_source": "csv",
+                     "click_path": str(EXAMPLES / "clicks_example_synthetic.csv.gz")}}
+
+
+def an_windows(p, cfg):
+    """Windows and their features for each detection type (no labels needed)."""
+    from speciesclassifiers.calltypes import make_windows, window_features
+    from speciesclassifiers.calltypes.clicks import click_windows
+    dets = ct_detectors(cfg)
+    if not dets:
+        raise ValueError("Choose at least one detection type (whistles or clicks).")
+    out = p.stage_dir("windows")
+    for f in list(out.glob("windows*")):
+        f.unlink()
+    n = {}
+    for det in dets:
+        if det == "whistle":
+            c, pts = load_pickle(p.folder / "contours" / "contours.pkl")
+            wp = ct_window_params(cfg)
+            w = window_features(make_windows(c, wp), c, pts, wp) if len(c) else pd.DataFrame(columns=["w_start", "w_end"])
+        else:
+            w = click_windows(load_pickle(p.folder / "clicks" / "clicks.pkl"), ct_click_params(cfg))
+        w = w.sort_values("w_start", kind="mergesort").drop_duplicates("w_start").reset_index(drop=True)
+        _save_pickle(w, _windows_file(p, det))
+        n[det] = len(w)
+        print(f"{len(w)} {det} windows")
+    _write_json({"detectors": dets, "n_windows_by_type": n}, out / "summary.json")
+
+
+def an_cluster_params(cfg, det):
+    from speciesclassifiers.annotate import ClusterParams
+    c = ((cfg["settings"].get("cluster") or {}).get(det)) or {}
+    return ClusterParams(**{k: v for k, v in c.items() if k in ClusterParams.__dataclass_fields__})
+
+
+def an_map_file(p, det):
+    return p.folder / "cluster" / f"map_{det}.pkl"
+
+
+def an_cluster(p, cfg):
+    """PCA -> UMAP map -> HDBSCAN clusters, per detection type."""
+    from speciesclassifiers.annotate import embed_and_cluster
+    from speciesclassifiers.calltypes.windows import feature_columns
+    out = p.stage_dir("cluster")
+    for f in list(out.glob("map_*")):
+        f.unlink()
+    info = {}
+    for det in ct_detectors(cfg):
+        w = load_pickle(_windows_file(p, det))
+        cols = feature_columns(w.columns, ct_features(cfg, det) or default_features_(det))
+        print(f"{det}s:")
+        m, i = embed_and_cluster(w, cols, an_cluster_params(cfg, det))
+        m.insert(0, "w_start", w["w_start"].to_numpy())
+        m.insert(1, "w_end", w["w_end"].to_numpy())
+        _save_pickle(m, an_map_file(p, det))
+        info[det] = i
+    _write_json(info, out / "info.json")
+
+
+def default_features_(det):
+    from speciesclassifiers.calltypes.windows import default_features
+    return default_features(det)
+
+
+ANNOTATE = Workflow(
+    "annotate", "Cluster and label",
+    "Map windows of whistles and/or clicks by their features, cluster them, and label whole clusters to make "
+    "annotations (event_id, label, start, end).",
+    [Stage("contours", "Read and measure contours", ct_contours,
+           ["data.source", "data.path", "data.use_whistles", "settings.contours"]),
+     Stage("clicks", "Read clicks", ct_clicks, ["data.click_source", "data.click_path", "settings.click_spectrum"],
+           optional=True, enabled=lambda cfg: bool(cfg.get("data", {}).get("use_clicks"))),
+     Stage("windows", "Windows and features", an_windows,
+           ["settings.windows", "settings.clicks", "data.use_whistles", "data.use_clicks"]),
+     Stage("cluster", "Map and clusters", an_cluster, ["settings.cluster", "settings.features"])],
+    an_defaults, an_example)
+
+WORKFLOWS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID,
+             "annotate": ANNOTATE}
