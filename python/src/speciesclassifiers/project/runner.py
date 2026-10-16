@@ -108,6 +108,13 @@ def run(folder, stages=None, force=False, echo=False):
                 p.save_status(state)
 
     threading.Thread(target=heartbeat, daemon=True).start()
+
+    def on_progress(what, i, n, eta):
+        with lock:
+            state["run"].update(step=what, step_i=i, step_n=n, step_eta=eta,
+                                progress=(i / n if n else None))
+    from speciesclassifiers import progress as _progress
+    _progress.set_hook(on_progress)
     targets = stages or [s.name for s in wf.stages]
     need = _needed(wf, targets)
     old_out, old_err = sys.stdout, sys.stderr
@@ -126,7 +133,8 @@ def run(folder, stages=None, force=False, echo=False):
                 print(f"--- {stage.title}: up to date")
                 continue
             with lock:
-                state["run"].update(stage=stage.name, progress=None, message=stage.title)
+                state["run"].update(stage=stage.name, progress=None, message=stage.title, step=None, step_i=None,
+                                    step_n=None, step_eta=None)
                 state["stages"][stage.name] = {"state": "running", "started": now_iso()}
                 p.save_status(state)
             print(f"--- {stage.title}")
@@ -146,11 +154,12 @@ def run(folder, stages=None, force=False, echo=False):
                 p.save_status(state)
         print(f"===== Run {result} {now_iso()} =====")
     finally:
+        _progress.set_hook(None)
         sys.stdout, sys.stderr = old_out, old_err
         log.close()
         done.set()
         with lock:
-            state["run"].update(state=result, ended=now_iso(), progress=None, stage=None,
+            state["run"].update(state=result, ended=now_iso(), progress=None, stage=None, step=None,
                                 message="Finished" if result == "finished" else state["run"].get("message"))
             p.save_status(state)
     return result

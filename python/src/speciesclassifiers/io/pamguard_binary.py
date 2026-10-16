@@ -18,6 +18,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from speciesclassifiers.progress import track
+
 FILE_TIME = re.compile(r"_(\d{8})_(\d{6})\.pgdf$")
 CLICK_PATTERN = "Click_Detector_Clicks"
 WHISTLE_PATTERN = "Contours"
@@ -151,7 +153,7 @@ def read_clicks(folder, periods=None, sample_rate=None, pattern=CLICK_PATTERN, p
     """
     rows, rates, parts, pending = [], [], [], []
     files = list_binaries(folder, pattern, periods)
-    for k, f in enumerate(files):
+    for k, f in enumerate(track(files, "Reading click files", quiet=not progress)):
         pf = _load(f)
         if not pf.data:
             continue
@@ -176,10 +178,8 @@ def read_clicks(folder, periods=None, sample_rate=None, pattern=CLICK_PATTERN, p
             else:                                 # sample rate unknown so far: measure at the end
                 parts.append(None)
                 pending.append((len(parts) - 1, waves))
-        if progress and (k + 1) % 50 == 0:
-            print(f"  read {k + 1}/{len(files)} files")
     sr = sample_rate or _consensus(rates, "sample rate")
-    for i, waves in pending:
+    for i, waves in track(pending, "Measuring clicks", quiet=True):
         parts[i] = measure(waves, sr)
     df = pd.DataFrame(rows, columns=["start", "sample_duration", "wave", "uid", "file"])
     df.insert(1, "duration", df.pop("sample_duration") / sr if sr else np.nan)
@@ -199,7 +199,7 @@ def read_whistles(folder, periods=None, sample_rate=None, fft_len=None, fft_hop=
     """
     files = list_binaries(folder, pattern, periods)
     loaded = []                                  # (file, contours, (sr, hop, fft) or Nones)
-    for k, f in enumerate(files):
+    for k, f in enumerate(track(files, "Reading whistle files", quiet=not progress)):
         pf = _load(f)
         if not pf.data:
             continue
@@ -207,8 +207,6 @@ def read_whistles(folder, periods=None, sample_rate=None, fft_len=None, fft_hop=
         sr, hop, fl, fstep = detect_whistle_settings(d)
         sr, hop, fl = sample_rate or sr, fft_hop or hop, fft_len or fl
         loaded.append((f, d, sr, hop, fl, fstep))
-        if progress and (k + 1) % 50 == 0:
-            print(f"  read {k + 1}/{len(files)} files")
     settings = {"sample_rate": sample_rate or _consensus([x[2] for x in loaded], "sample rate"),
                 "fft_hop": _consensus([x[3] for x in loaded], "FFT hop"),
                 "fft_len": _consensus([x[4] for x in loaded], "FFT length")}

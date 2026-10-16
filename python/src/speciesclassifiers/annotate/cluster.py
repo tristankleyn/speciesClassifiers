@@ -79,16 +79,21 @@ def embed_and_cluster(windows, cols, params: ClusterParams = None):
         nc = None
     if isinstance(nc, int):
         nc = min(nc, X.shape[1], n)
+    from speciesclassifiers.progress import step
+    step("PCA")
     pca = PCA(n_components=nc, svd_solver="full", random_state=params.seed).fit(X)
     Z = pca.transform(X)
     print(f"  {n} windows, {len(used)} features -> {Z.shape[1]} PCA components "
           f"({pca.explained_variance_ratio_.sum():.0%} of the variance)")
     print(f"  UMAP map (neighbours {params.n_neighbors}, min distance {params.min_dist})...")
+    step(f"UMAP map of {n} points (no count available; can take minutes for many points)")
     xy = _umap(Z, 2, params, params.min_dist)
     space = xy
     if params.cluster_dims and params.cluster_dims > 2:
         print(f"  UMAP to {params.cluster_dims} dimensions for clustering...")
+        step(f"UMAP to {params.cluster_dims} dimensions")
         space = _umap(Z, params.cluster_dims, params, 0.0)
+    step("HDBSCAN clusters")
     mcs = max(2, min(params.min_cluster_size, n))
     cl = HDBSCAN(min_cluster_size=mcs, min_samples=params.min_samples or None,
                  cluster_selection_method=params.selection, copy=True).fit_predict(space)

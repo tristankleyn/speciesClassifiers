@@ -703,7 +703,15 @@ def run_panel(p, kind):
         stop_btn = ui.button("Stop", icon="stop", on_click=lambda: (p.request_stop(), ui.notify("Stopping..."))
                              ).props("outline color=negative")
     stage_label = ui.label().classes("font-medium mt-2")
-    bar = ui.linear_progress(value=0, show_value=False).classes("w-full")
+    stage_rows = ui.column().classes("w-full max-w-3xl gap-1")
+    bars = {}
+    with stage_rows:
+        for s_ in p.workflow.stages:
+            with ui.row().classes("w-full items-center no-wrap gap-3") as row_:
+                ui.label(s_.title).classes("text-sm w-80 shrink-0")
+                b_ = ui.linear_progress(value=0, show_value=False, size="10px").classes("grow")
+            bars[s_.name] = (row_, b_)
+    step_lbl = ui.label().classes("text-sm text-gray-700")
     msg = ui.label().classes("text-sm text-gray-600 font-mono")
     errors = ui.column().classes("w-full")
     with ui.expansion("Log", icon="article", value=False).classes("w-full"):
@@ -729,25 +737,44 @@ def run_panel(p, kind):
         running = p.is_running(st)
         run_btn.set_enabled(not running)
         stop_btn.set_enabled(running)
+        cfg_ = p.config()
+        states_ = p.stage_states()
+        stage = r.get("stage") if running else None
+        for s_ in p.workflow.stages:
+            row_, b_ = bars[s_.name]
+            row_.set_visibility(not (s_.optional and not s_.enabled(cfg_)))
+            b_.props(remove="indeterminate color=positive")
+            if s_.name == stage:
+                prog = r.get("progress")
+                if prog is None:
+                    b_.props("indeterminate")
+                else:
+                    b_.value = prog
+            else:
+                done_ = states_.get(s_.name) in ("done",)
+                b_.value = 1 if done_ else 0
+                if done_:
+                    b_.props("color=positive")
         if running:
-            stage = r.get("stage")
             title = next((s.title for s in p.workflow.stages if s.name == stage), "Starting")
             stage_label.text = f"Running: {title}"
-            prog = r.get("progress")
-            if prog is None:
-                bar.props("indeterminate")
+            stp, i_, n_, eta = r.get("step"), r.get("step_i"), r.get("step_n"), r.get("step_eta")
+            if stp and n_:
+                left = "" if eta is None or i_ == 0 else (
+                    f" · about {eta:.0f} s left" if eta < 90 else f" · about {eta / 60:.0f} min left")
+                step_lbl.text = f"{stp}: {i_:,} / {n_:,} ({i_ / n_:.0%}){left}"
+            elif stp:
+                step_lbl.text = f"{stp}..."
             else:
-                bar.props(remove="indeterminate")
-                bar.value = prog
+                step_lbl.text = ""
             msg.text = r.get("message", "")
         else:
-            bar.props(remove="indeterminate")
             state = r.get("state")
             if state == "running":
                 state = "stopped unexpectedly"
             stage_label.text = {None: "Not run yet", "finished": "Last run finished",
                                 "failed": "Last run failed", "stopped": "Stopped"}.get(state, f"Last run: {state}")
-            bar.value = 1 if state == "finished" else 0
+            step_lbl.text = ""
             msg.text = (r.get("ended") or "")
         errors.clear()
         with errors:

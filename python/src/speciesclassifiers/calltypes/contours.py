@@ -73,7 +73,8 @@ def prepare_contours(whistles: pd.DataFrame, params: ContourParams = None):
     """
     params = params or ContourParams()
     rows, pts = [], []
-    for r in whistles.itertuples(index=False):
+    from speciesclassifiers.progress import track
+    for r in track(whistles.itertuples(index=False), "Measuring contours", total=len(whistles)):
         slice_s = float(r.slice_s)
         t_all = np.asarray(r.times, float)
         t_all = np.round((t_all - t_all[0]) / slice_s) * slice_s   # whole slices, as PAMGuard counts them

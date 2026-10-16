@@ -170,7 +170,9 @@ def click_windows(clicks, params: ClickWindowParams = None):
     L = params.window_s
     step = L * (1 - params.overlap)
     rows = []
-    for day, g in clicks.groupby("day", sort=True):
+    from speciesclassifiers.progress import track
+    days = clicks.groupby("day", sort=True)
+    for day, g in track(days, "Click windows (days)", total=days.ngroups):
         gi = g.index.to_numpy()
         t = g["start"].to_numpy(float)
         t0 = np.floor(t.min() / 60) * 60

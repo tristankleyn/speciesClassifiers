@@ -124,7 +124,8 @@ def window_features(windows, contours, points, params: WindowParams):
     # exactly on a window edge are assigned the same way every time
     ws_ns, we_ns, cs_ns = (np.round(x * 1e9).astype(np.int64) for x in (ws, we, cs))
     pw, pf, pdur = [], [], []
-    for i, j in zip(I, J):
+    from speciesclassifiers.progress import track
+    for i, j in track(zip(I, J), "Window features (contour points)", total=len(I), quiet=True):
         t = cs_ns[j] + (points[j][0] * 1e9).astype(np.int64)
         m = (t >= ws_ns[i]) & (t < we_ns[i])
         pw.append(np.full(m.sum(), i))

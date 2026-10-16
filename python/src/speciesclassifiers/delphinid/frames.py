@@ -132,7 +132,9 @@ def click_frames(clicks: pd.DataFrame, params: AcousticParams, sample_rate: floa
     _check_cols(clicks, ["start", "duration", "wave", "event_id"])
     transforms = params.transforms()
     rows, n_bad = [], 0
-    for ev, d in clicks.groupby("event_id", sort=False):
+    from speciesclassifiers.progress import track
+    evs = clicks.groupby("event_id", sort=False)
+    for ev, d in track(evs, "Click frames (events)", total=evs.ngroups):
         d = d.sort_values("start")
         info = _event_info(d, {"start", "duration", "wave", "event_id"})
         s = d["start"].to_numpy(float)
@@ -165,7 +167,9 @@ def whistle_frames(contours: pd.DataFrame, params: AcousticParams) -> pd.DataFra
     transforms = params.transforms()
     rows = []
     skip = {"start", "duration", "times", "freqs", "event_id"}
-    for ev, d in contours.groupby("event_id", sort=False):
+    from speciesclassifiers.progress import track
+    evs = contours.groupby("event_id", sort=False)
+    for ev, d in track(evs, "Whistle frames (events)", total=evs.ngroups):
         d = d.sort_values("start")
         info = _event_info(d, skip)
         recs = d[["start", "duration", "times", "freqs"]].to_dict("records")
