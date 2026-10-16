@@ -16,7 +16,7 @@ from speciesclassifiers.project import checks
 from speciesclassifiers.project.workflows import EXAMPLES
 
 from . import diagnostics_page as _diagnostics  # noqa: F401  (registers /diagnostics)
-from . import results
+from . import annotate_ui, results
 from .settings import SETTINGS, applies
 from .widgets import Saver, field, open_folder, path_row, pick_path, show_check
 
@@ -51,6 +51,13 @@ METHODS = [   # (key, title, icon, one-sentence caption, requirements)
       "**Call annotations**: a CSV with one row per call: `event_id, label` (call type, or `untyped`), "
       "`start, end` (UTC), plus optional label columns such as `species`; or annotation tables",
       "**Days**: annotated calls from at least 2 days; days without annotations can be included too"]),
+    ("annotate", "Cluster and label (semi-supervised annotation)", "scatter_plot",
+     "Maps windows of whistles and/or clicks by their features and clusters them; label whole clusters to make "
+     "annotations.",
+     ["**Detections**: PAMGuard binary files from the Whistle and Moan Detector and/or Click Detector (or a "
+      "contours JSON / clicks CSV)",
+      "**No labels needed**: you give them on the map; they are saved as annotations "
+      "(`event_id, label, start, end`)"]),
 ]
 COMING = {"transferlearning": "Transfer learning isn't in the app yet: use notebook 04_transferlearning "
                               "(Python or R)."}
@@ -202,6 +209,8 @@ async def example_dialog():
                            "A base random forest per detection type (whistle contours, click spectra) and a final "
                            "forest that decides each time block from both.", rf_binaries_example))
         from speciesclassifiers.project.workflows import dl_multi_example
+        choices.append(("annotate", WORKFLOWS["annotate"].title, WORKFLOWS["annotate"].description,
+                        WORKFLOWS["annotate"].example))
         choices.insert(3, ("delphinid", "delphinID: whistles + clicks",
                            "A delphinID model per detection type (whistle and click frames) and a final forest that "
                            "decides each time block from both. Needs TensorFlow.", dl_multi_example))
@@ -241,9 +250,10 @@ def project_page(path: str):
         refresh_status()
 
     saver = Saver(p, on_saved)
-    steps = (["data", "labels"] if kind == "calltypes" else ["data"]) + ["settings", "run", "results", "apply"]
-    names = {"data": "Data", "labels": "Labels", "settings": "Settings", "run": "Run", "results": "Results",
-             "apply": "Classify new data · export"}
+    steps = (["data", "labels"] if kind == "calltypes" else ["data"]) + ["settings", "run", "results"] + \
+        ([] if kind == "annotate" else ["apply"])
+    names = {"data": "Data", "labels": "Labels", "settings": "Settings", "run": "Run",
+             "results": "Map and label" if kind == "annotate" else "Results", "apply": "Classify new data · export"}
     titles = {s: f"{k} · {names[s]}" for k, s in enumerate(steps, 1)}
 
     with ui.row().classes("w-full no-wrap items-start p-2 gap-4"):
@@ -276,7 +286,7 @@ def project_page(path: str):
             with ui.tab_panel("results"):
                 results_box = ui.column().classes("w-full")
                 next_button(panels, steps, "results", names)
-            with ui.tab_panel("apply"):
+            with ui.tab_panel("apply") if "apply" in steps else ui.column().classes("hidden"):
                 apply_box = ui.column().classes("w-full")
 
     last = {"mtime": None, "panel": None, "busy": False, "states": None, "run_state": None}
@@ -299,7 +309,7 @@ def project_page(path: str):
             with box:
                 if panels.value == "results":
                     await {"randomforest": results.rf_results, "calltypes": results.ct_results,
-                           "delphinid": results.dl_results}[kind](p, saver)
+                           "delphinid": results.dl_results, "annotate": annotate_ui.an_results}[kind](p, saver)
                 else:
                     await {"randomforest": results.rf_apply, "calltypes": results.ct_apply,
                            "delphinid": results.dl_export}[kind](p, saver, start_run)
@@ -470,12 +480,13 @@ def data_panel(p, saver, kind):
             out = ui.column().classes("w-full")
         opts()
     else:
-        ct_data_panel(p, saver)
+        ct_data_panel(p, saver, kind)
 
 
-def ct_data_panel(p, saver):
+def ct_data_panel(p, saver, kind="calltypes"):
     ui.markdown("#### Detections\nWhistles, clicks or both. Each detection type gets its own windows, "
-                "measurements and clusters; their class probabilities are combined for each decision block.")
+                "measurements and clusters" + ("; their class probabilities are combined for each decision block."
+                                               if kind == "calltypes" else ", and its own map to label."))
     with ui.row().classes("gap-6"):
         ui.checkbox("Whistles", value=saver.get("data.use_whistles", True),
                     on_change=lambda e: (saver.set("data.use_whistles", e.value), body.refresh()))

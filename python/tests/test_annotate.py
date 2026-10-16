@@ -59,3 +59,20 @@ def test_annotate_workflow_example(tmp_path):
     for det in ("whistle", "click"):
         m = load_pickle(an_map_file(p, det))
         assert {"w_start", "w_end", "x", "y", "cluster"} <= set(m.columns) and m["cluster"].max() >= 1
+
+
+def test_map_figure_and_viewer_helpers():
+    pytest.importorskip("nicegui")
+    from speciesclassifiers.app.annotate_ui import distinctive, map_figure, nice
+    w = blobs()
+    m = pd.DataFrame({"w_start": w["w_start"], "x": w["a"].fillna(0), "y": w["b"],
+                      "cluster": np.repeat([0, 1, -1], 60)})
+    labels = np.array(["KW"] * 30 + [""] * 150, dtype=object)
+    f = map_figure({"map": m}, labels, "cluster")
+    names = [t.get("name", "") for t in f["data"]]
+    assert names[:3] == ["cluster 0 (60)", "cluster 1 (60)", "unclustered (60)"]
+    assert sum(len(t["customdata"]) for t in f["data"] if "customdata" in t) == len(m)
+    f = map_figure({"map": m}, labels, "label")
+    assert [t["name"] for t in f["data"][:2]] == ["KW (30)", "(unlabelled) (150)"]
+    assert distinctive(w, list("abcd"), (m["cluster"] == 1).to_numpy(), k=2)[0] in list("abcd")
+    assert nice("prof_2700_3175", {}) == "share of contour points at 2.7-3.175 kHz"
