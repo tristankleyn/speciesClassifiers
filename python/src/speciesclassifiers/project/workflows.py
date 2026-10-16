@@ -1460,6 +1460,7 @@ def an_defaults():
     cp = ClusterParams().to_dict()
     s = {k: c["settings"][k] for k in ("contours", "windows", "clicks", "click_spectrum", "features")}
     s["cluster"] = {"whistle": dict(cp), "click": dict(cp)}
+    s["units"] = {"whistle": "detection", "click": "window"}
     return {"data": c["data"], "settings": s, "export": {"max_gap_s": 60.0, "min_windows": 1}}
 
 
@@ -1469,8 +1470,47 @@ def an_example():
                      "click_path": str(EXAMPLES / "clicks_example_synthetic.csv.gz")}}
 
 
+AN_UNITS = {"whistle": "detection", "click": "window"}       # defaults: each contour; windows of clicks
+
+
+def an_unit(cfg, det):
+    """What a point on the map is: "detection" (one contour / click) or "window"."""
+    return ((cfg["settings"].get("units") or {}).get(det)) or AN_UNITS[det]
+
+
+def an_feature_key(cfg, det):
+    """Feature-catalog name of a detection type's points."""
+    return det if an_unit(cfg, det) == "window" else f"{det}_detection"
+
+
+def an_detections(det, data, cfg):
+    """One row per detection with ``w_start``/``w_end`` (its start/end), ``unit_id`` and its measurements
+    (contours: shape; clicks: spectrum and the interval to the previous click)."""
+    from speciesclassifiers.annotate.labels import unit_ids
+    if det == "whistle":
+        c, _ = data
+        from speciesclassifiers.calltypes.windows import AGG_PARAMS
+        cols = [x for x in [*AGG_PARAMS, "snr_db", "amplitude_db", "day"] if x in c]
+        d = c[cols].copy()
+        d.insert(0, "cidx", np.arange(len(c)))          # row in contours.pkl (for drawing the contour)
+        d.insert(0, "w_end", c["end"].to_numpy(float))
+        d.insert(0, "w_start", c["start"].to_numpy(float))
+    else:
+        c = data
+        gap = np.diff(c["start"].to_numpy(float), prepend=np.nan)
+        cp = ct_click_params(cfg)
+        gap[(gap > cp.max_ici_s) | (gap <= cp.min_ici_s)] = np.nan
+        d = c.drop(columns=["start", "end", "duration_s"]).copy()
+        d.insert(0, "w_end", c["end"].to_numpy(float))
+        d.insert(0, "w_start", c["start"].to_numpy(float))
+        d["ici_prev_s"] = gap
+    d = d.sort_values("w_start", kind="mergesort").reset_index(drop=True)
+    d["unit_id"] = unit_ids(d["w_start"])
+    return d
+
+
 def an_windows(p, cfg):
-    """Windows and their features for each detection type (no labels needed)."""
+    """Points for the maps, per detection type: windows and their features, or single detections."""
     from speciesclassifiers.calltypes import make_windows, window_features
     from speciesclassifiers.calltypes.clicks import click_windows
     dets = ct_detectors(cfg)
@@ -1481,17 +1521,26 @@ def an_windows(p, cfg):
         f.unlink()
     n = {}
     for det in dets:
-        if det == "whistle":
-            c, pts = load_pickle(p.folder / "contours" / "contours.pkl")
-            wp = ct_window_params(cfg)
-            w = window_features(make_windows(c, wp), c, pts, wp) if len(c) else pd.DataFrame(columns=["w_start", "w_end"])
+        data = load_pickle(p.folder / "contours" / "contours.pkl") if det == "whistle" else \
+            load_pickle(p.folder / "clicks" / "clicks.pkl")
+        if an_unit(cfg, det) == "detection":
+            w = an_detections(det, data, cfg)
+            what = "contours" if det == "whistle" else "clicks"
         else:
-            w = click_windows(load_pickle(p.folder / "clicks" / "clicks.pkl"), ct_click_params(cfg))
-        w = w.sort_values("w_start", kind="mergesort").drop_duplicates("w_start").reset_index(drop=True)
+            if det == "whistle":
+                c, pts = data
+                wp = ct_window_params(cfg)
+                w = window_features(make_windows(c, wp), c, pts, wp) if len(c) else \
+                    pd.DataFrame(columns=["w_start", "w_end"])
+            else:
+                w = click_windows(data, ct_click_params(cfg))
+            w = w.sort_values("w_start", kind="mergesort").drop_duplicates("w_start").reset_index(drop=True)
+            what = f"{det} windows"
         _save_pickle(w, _windows_file(p, det))
         n[det] = len(w)
-        print(f"{len(w)} {det} windows")
-    _write_json({"detectors": dets, "n_windows_by_type": n}, out / "summary.json")
+        print(f"{len(w)} {what}")
+    _write_json({"detectors": dets, "n_by_type": n, "units": {d: an_unit(cfg, d) for d in dets}},
+                out / "summary.json")
 
 
 def an_cluster_params(cfg, det):
@@ -1514,11 +1563,14 @@ def an_cluster(p, cfg):
     info = {}
     for det in ct_detectors(cfg):
         w = load_pickle(_windows_file(p, det))
-        cols = feature_columns(w.columns, ct_features(cfg, det) or default_features_(det))
-        print(f"{det}s:")
+        key = an_feature_key(cfg, det)
+        chosen = (cfg["settings"].get("features") or {}).get(key)
+        cols = feature_columns(w.columns, chosen or default_features_(key))
+        print(f"{det}s ({'single detections' if an_unit(cfg, det) == 'detection' else 'windows'}):")
         m, i = embed_and_cluster(w, cols, an_cluster_params(cfg, det))
         m.insert(0, "w_start", w["w_start"].to_numpy())
         m.insert(1, "w_end", w["w_end"].to_numpy())
+        m["unit"] = an_unit(cfg, det)
         _save_pickle(m, an_map_file(p, det))
         info[det] = i
     _write_json(info, out / "info.json")
@@ -1537,8 +1589,8 @@ ANNOTATE = Workflow(
            ["data.source", "data.path", "data.use_whistles", "settings.contours"]),
      Stage("clicks", "Read clicks", ct_clicks, ["data.click_source", "data.click_path", "settings.click_spectrum"],
            optional=True, enabled=lambda cfg: bool(cfg.get("data", {}).get("use_clicks"))),
-     Stage("windows", "Windows and features", an_windows,
-           ["settings.windows", "settings.clicks", "data.use_whistles", "data.use_clicks"]),
+     Stage("windows", "Points: windows or detections, and features", an_windows,
+           ["settings.windows", "settings.clicks", "settings.units", "data.use_whistles", "data.use_clicks"]),
      Stage("cluster", "Map and clusters", an_cluster, ["settings.cluster", "settings.features"])],
     an_defaults, an_example)
 

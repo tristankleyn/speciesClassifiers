@@ -310,10 +310,10 @@ def cluster_specs(det):
     """Clustering settings of one detection type (also shown on the map page)."""
     k = f"settings.cluster.{det}"
     return [
-        {"key": f"{k}.min_cluster_size", "label": "Smallest cluster (windows)", "kind": "int", "min": 2,
+        {"key": f"{k}.min_cluster_size", "label": "Smallest cluster (points)", "kind": "int", "min": 2,
          "help": "larger = fewer, bigger clusters"},
         {"key": f"{k}.min_samples", "label": "Neighbourhood density", "kind": "int", "min": 0,
-         "help": "0 = same as the smallest cluster; larger = more windows left unclustered"},
+         "help": "0 = same as the smallest cluster; larger = more points left unclustered"},
         {"key": f"{k}.selection", "label": "Cluster selection", "kind": "select",
          "options": {"eom": "fewer, larger clusters", "leaf": "more, finer clusters"}},
         {"key": f"{k}.n_neighbors", "label": "Map neighbours (UMAP)", "kind": "int", "min": 2,
@@ -333,10 +333,31 @@ def cluster_specs(det):
 import copy as _copy
 ANNOTATE = [_copy.deepcopy(g) for g in CALLTYPES if g[0] in ("Whistle contours", "Whistle windows", "Click windows",
                                                                "Click spectrum")]
+UNIT_W, UNIT_C = "settings.units.whistle", "settings.units.click"
 for _g in ANNOTATE:
     for _s in _g[1]:
         if _s.get("kind") == "features":
             _s.pop("advanced", None)
+        if _g[0] == "Whistle windows":
+            _s["also"] = (UNIT_W, "window")
+        elif _g[0] == "Click windows" and "ici" not in _s["key"]:
+            _s["also"] = (UNIT_C, "window")
+    if _g[0] == "Whistle contours":
+        _g[1].append({"key": "settings.features.whistle_detection", "label": "Contour features used",
+                      "kind": "features", "detector": "whistle_detection", "when": USE_WHISTLES,
+                      "also": (UNIT_W, "detection")})
+    if _g[0] == "Click spectrum":
+        _g[1].append({"key": "settings.features.click_detection", "label": "Click features used",
+                      "kind": "features", "detector": "click_detection", "when": USE_CLICKS,
+                      "also": (UNIT_C, "detection")})
+ANNOTATE.insert(0, ("What each point on the map is", [
+    {"key": UNIT_W, "label": "Whistles", "kind": "select", "when": USE_WHISTLES,
+     "options": {"detection": "each contour", "window": "windows of contours"},
+     "help": "single contours show call shapes best; windows summarise what is heard together"},
+    {"key": UNIT_C, "label": "Clicks", "kind": "select", "when": USE_CLICKS,
+     "options": {"detection": "each click", "window": "windows of clicks (trains)"},
+     "help": "windows carry inter-click interval patterns; single clicks only their spectrum and the interval "
+             "to the previous click (many points: slower)"}]))
 ANNOTATE += [("Whistle clustering", [dict(s, when=USE_WHISTLES) for s in cluster_specs("whistle")]),
              ("Click clustering", [dict(s, when=USE_CLICKS) for s in cluster_specs("click")])]
 
@@ -350,7 +371,8 @@ _fill_defaults(ANNOTATE, _an_defaults())
 
 SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID, "annotate": ANNOTATE}
 # values of keys that older projects may not have yet
-CONDITION_DEFAULTS = {"data.use_whistles": True, "data.use_clicks": False, "decision.method": "multiply"}
+CONDITION_DEFAULTS = {"data.use_whistles": True, "data.use_clicks": False, "decision.method": "multiply",
+                      "settings.units.whistle": "detection", "settings.units.click": "window"}
 
 
 def applies(spec, cfg):

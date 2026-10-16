@@ -36,7 +36,7 @@ class ClusterParams:
     metric: str = "euclidean"
     cluster_dims: int = 2
     min_cluster_size: int = 30
-    min_samples: int = 0
+    min_samples: int = 5
     selection: str = "eom"
     seed: int = 42
 

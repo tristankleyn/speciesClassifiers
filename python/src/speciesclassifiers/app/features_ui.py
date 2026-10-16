@@ -19,7 +19,7 @@ def feature_stats(project, detector):
     """Per feature: median and 5th-95th percentile over all windows, and the median per class of the first
     label column (from the windows stage, if it has run). Returns (rows by key, class column, classes)."""
     from speciesclassifiers.project.workflows import _windows_file, load_pickle
-    f = _windows_file(project, detector)
+    f = _windows_file(project, detector.split("_")[0])
     if not f.is_file():
         return {}, None, []
     w = load_pickle(f)
@@ -33,6 +33,9 @@ def feature_stats(project, detector):
     out = {}
     for item in feature_catalog(detector):
         k = item["key"]
+        if k in PROFILE_PREFIX and detector.endswith("_detection") and not any(
+                c.startswith(PROFILE_PREFIX[k]) for c in w.columns):
+            continue
         if k in PROFILE_PREFIX:
             n = sum(c.startswith(PROFILE_PREFIX[k]) for c in w.columns)
             out[k] = {"median": f"{n} bands" if n else "", "range": ""}
@@ -74,7 +77,7 @@ def features_field(saver, spec):
     async def open_dialog():
         with ui.dialog() as dlg, ui.card().classes("w-[72rem] max-w-full"):
             ui.label(spec["label"]).classes("text-lg font-medium")
-            ui.label("Ticked features describe each window for clustering. Values are from the windows of your "
+            ui.label("Ticked features describe each point (window or detection) for clustering. Values are from your "
                      "data once they have been made (Run). Level-dependent features (SNR, number of clicks) "
                      "depend on distance to the animals, so they're off by default.").classes(
                 "text-sm text-gray-600")

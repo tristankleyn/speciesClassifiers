@@ -40,8 +40,10 @@ def load_view(p, det):
         if len(w) != len(m) or not np.allclose(w["w_start"].to_numpy(float), m["w_start"].to_numpy(float)):
             raise ValueError("The map is older than the windows: run again")
         info = (read_json(p.folder / "cluster" / "info.json", {}) or {}).get(det, {})
+        unit = str(m["unit"].iloc[0]) if "unit" in m and len(m) else "window"
         v = {"map": m, "windows": w, "features": info.get("features") or [], "info": info,
-             "ids": np.array(window_ids(w))}
+             "ids": np.array(window_ids(w)), "unit": unit,
+             "word": ({"whistle": "contours", "click": "clicks"}[det] if unit == "detection" else f"{det} windows")}
         if det == "whistle" and files[2].is_file():
             v["contours"] = load_pickle(files[2])
         for k in [k for k in _CACHE if k[:2] == key[:2]]:
@@ -50,9 +52,11 @@ def load_view(p, det):
     return _CACHE[key]
 
 
-def feature_names(det):
+def feature_names(det, unit="window"):
     from speciesclassifiers.calltypes.windows import feature_catalog
     names = {}
+    if unit == "detection":
+        return {i["key"]: i["label"] for i in feature_catalog(f"{det}_detection")}
     for i in feature_catalog(det):
         g = i["group"]
         if det == "click":
@@ -131,7 +135,7 @@ def map_figure(v, labels, color_by, height=640):
             "config": {"displaylogo": False, "scrollZoom": True}}
 
 
-def hist_figure(w, cols, sel, names, colour):
+def hist_figure(w, cols, sel, names, colour, word="windows"):
     from matplotlib.figure import Figure
     k = len(cols)
     nc = 3
@@ -145,7 +149,7 @@ def hist_figure(w, cols, sel, names, colour):
         if hi <= lo:
             lo, hi = lo - 0.5, hi + 0.5
         bins = np.linspace(lo, hi, 40)
-        ax.hist(np.clip(x[ok], lo, hi), bins=bins, density=True, color=GREY, alpha=0.7, label="all windows")
+        ax.hist(np.clip(x[ok], lo, hi), bins=bins, density=True, color=GREY, alpha=0.7, label=f"all {word}")
         xs = x[sel & ok]
         if len(xs):
             ax.hist(np.clip(xs, lo, hi), bins=bins, density=True, histtype="stepfilled", alpha=0.55, color=colour,
@@ -164,10 +168,11 @@ def hist_figure(w, cols, sel, names, colour):
 
 
 def contour_figure(v, idx, colour, seed=0):
-    """Whistles: contours of up to 40 of the cluster's windows overlaid (time within the window), and 8 of
-    them one by one."""
+    """Whistles: up to 40 of the cluster's points overlaid (single contours from their start; windows: their
+    contours at their time in the window), and 4 of them one by one."""
     from matplotlib.figure import Figure
     w, (c, pts) = v["windows"], v["contours"]
+    single = v.get("unit") == "detection"
     rng = np.random.default_rng(seed)
     pick = rng.choice(idx, min(40, len(idx)), replace=False) if len(idx) else idx
     cs, ce = c["start"].to_numpy(float), c["end"].to_numpy(float)
@@ -175,29 +180,33 @@ def contour_figure(v, idx, colour, seed=0):
     gs = fig.add_gridspec(3, 4)
     top = fig.add_subplot(gs[0:2, :])
     small = [fig.add_subplot(gs[2, j]) for j in range(4)]
-    L = float((w["w_end"] - w["w_start"]).median())
+    L = float((w["w_end"] - w["w_start"]).median()) if not single else 0.0
     fmax = 0
     for n, i in enumerate(pick):
         ws, we = float(w["w_start"].iloc[i]), float(w["w_end"].iloc[i])
-        for j in np.where((cs < we) & (ce > ws))[0]:
+        rows = [int(w["cidx"].iloc[i])] if single else np.where((cs < we) & (ce > ws))[0]
+        for j in rows:
             t, f, _ = pts[j]
-            x = cs[j] - ws + np.asarray(t)
+            x = (0.0 if single else cs[j] - ws) + np.asarray(t)
             y = np.asarray(f) / 1000
             fmax = max(fmax, y.max())
+            if single:
+                L = max(L, x.max())
             top.plot(x, y, color=colour, alpha=0.35, lw=1)
             if n < 4:
                 small[n].plot(x, y, color=colour, lw=1.2)
         if n < 4:
             small[n].set_title(pd.Timestamp(ws, unit="s", tz="UTC").strftime("%Y-%m-%d %H:%M:%S"), fontsize=8)
-    top.set(xlim=(0, L), xlabel="Time in window (s)", ylabel="Frequency (kHz)",
-            title=f"Contours of {len(pick)} of the cluster's {len(idx)} windows")
+    what = "contours" if single else "windows"
+    top.set(xlabel="Time from contour start (s)" if single else "Time in window (s)", ylabel="Frequency (kHz)",
+            title=f"{len(pick)} of the cluster's {len(idx)} {what}")
     top.title.set_fontsize(10)
     for ax in [top] + small:
-        ax.set_xlim(0, L)
+        ax.set_xlim(0, L or 1)
         ax.set_ylim(0, fmax * 1.05 if fmax else 1)
         ax.tick_params(labelsize=8)
-        for s in ("top", "right"):
-            ax.spines[s].set_visible(False)
+        for s_ in ("top", "right"):
+            ax.spines[s_].set_visible(False)
     for ax in small[len(pick):]:
         ax.set_visible(False)
     fig.tight_layout()
@@ -205,9 +214,11 @@ def contour_figure(v, idx, colour, seed=0):
 
 
 def click_figure(v, idx, colour):
-    """Clicks: the windows' mean click spectrum profiles (cluster vs all) and their inter-click intervals."""
+    """Clicks: spectrum profiles (cluster vs all; windows: mean over their clicks) and inter-click intervals
+    (windows: their median; single clicks: the interval to the previous click)."""
     from matplotlib.figure import Figure
     w = v["windows"]
+    word = v.get("word", "windows").split()[-1]
     prof = [c for c in w.columns if str(c).startswith("csp_")]
     fig = Figure(figsize=(10, 3.4))
     a1, a2 = fig.subplots(1, 2)
@@ -216,19 +227,23 @@ def click_figure(v, idx, colour):
         k = np.arange(1, len(prof) + 1)
         for i in idx[:200]:
             a1.plot(k, P[i], color=colour, alpha=0.08, lw=1)
-        a1.plot(k, np.nanmedian(P, axis=0), color="#555", lw=2, label="all windows (median)")
+        a1.plot(k, np.nanmedian(P, axis=0), color="#555", lw=2, label=f"all {word} (median)")
         a1.plot(k, np.nanmedian(P[idx], axis=0), color=colour, lw=2.5, label="this cluster (median)")
         a1.set(xlabel="Spectrum band (low to high frequency)", ylabel="Share of energy")
         a1.legend(fontsize=8, frameon=False)
     else:
         a1.text(0.5, 0.5, "No click spectrum profiles in these data", ha="center", va="center", transform=a1.transAxes)
         a1.set_axis_off()
-    if "ici_median_s" in w:
-        x = w["ici_median_s"].to_numpy(float) * 1000
-        bins = np.linspace(0, np.nanquantile(x, 0.99) or 1, 40)
-        a2.hist(x, bins=bins, density=True, color=GREY, alpha=0.7, label="all windows")
-        a2.hist(x[idx], bins=bins, density=True, color=colour, alpha=0.55, label="this cluster")
-        a2.set(xlabel="Median inter-click interval (ms)")
+    ici = "ici_median_s" if "ici_median_s" in w else ("ici_prev_s" if "ici_prev_s" in w else None)
+    if ici:
+        x = w[ici].to_numpy(float) * 1000
+        bins = np.linspace(0, (np.nanquantile(x, 0.99) if np.isfinite(x).any() else 1) or 1, 40)
+        a2.hist(x[np.isfinite(x)], bins=bins, density=True, color=GREY, alpha=0.7, label=f"all {word}")
+        xi = x[idx]
+        if np.isfinite(xi).any():
+            a2.hist(xi[np.isfinite(xi)], bins=bins, density=True, color=colour, alpha=0.55, label="this cluster")
+        a2.set(xlabel="Median inter-click interval (ms)" if ici == "ici_median_s" else
+               "Interval to the previous click (ms)")
         a2.set_yticks([])
         a2.legend(fontsize=8, frameon=False)
     for ax in (a1, a2):
@@ -251,7 +266,6 @@ async def an_results(p, saver):
         ui.label("No map yet: go to Run.").classes("text-gray-600")
         return
     st = {"det": dets[0], "color": "cluster"}
-    names = {d: feature_names(d) for d in dets}
 
     with ui.row().classes("w-full items-center gap-4"):
         if len(dets) > 1:
@@ -294,7 +308,7 @@ async def an_results(p, saver):
         summary.clear()
         cnt = pd.Series(labels[labels != ""]).value_counts()
         with summary:
-            ui.label(f"{len(labels)} {st['det']} windows · {v['info'].get('n_clusters', '?')} clusters · "
+            ui.label(f"{len(labels)} {v['word']} · {v['info'].get('n_clusters', '?')} clusters · "
                      f"{(labels != '').sum()} labelled").classes("text-sm")
             for lab, n in cnt.items():
                 ui.chip(f"{lab}: {n}").props("dense outline")
@@ -330,6 +344,7 @@ async def an_results(p, saver):
         v = view["v"]
         det = st["det"]
         m, w = v["map"], v["windows"]
+        names, word = feature_names(det, v["unit"]), v["word"]
         sel = (m["cluster"] == c).to_numpy()
         idx = np.where(sel)[0]
         colour = GREY if c < 0 else style(c)[0]
@@ -338,7 +353,7 @@ async def an_results(p, saver):
         known = sorted(set(s.counts()))
         cols = [f for f in v["features"] if f in w]
         top = distinctive(w, cols, sel) if cols else []
-        name = "Unclustered windows" if c < 0 else f"Cluster {c}"
+        name = f"Unclustered {word}" if c < 0 else f"Cluster {c}"
         t = pd.to_datetime(w["w_start"].to_numpy()[idx], unit="s", utc=True)
         with ui.dialog().props("maximized=false") as dlg, ui.card().classes("w-[72rem] max-w-full"):
             with ui.row().classes("w-full items-center"):
@@ -347,13 +362,13 @@ async def an_results(p, saver):
                 ui.space()
                 ui.button(icon="close", on_click=dlg.close).props("flat round dense")
             lab = pd.Series(labels[idx]).replace("", UNLABELLED).value_counts()
-            ui.label(f"{len(idx)} windows ({len(idx) / len(w):.1%} of all) · {t.min():%Y-%m-%d %H:%M} to "
+            ui.label(f"{len(idx)} {word} ({len(idx) / len(w):.1%} of all) · {t.min():%Y-%m-%d %H:%M} to "
                      f"{t.max():%Y-%m-%d %H:%M} UTC on {t.strftime('%Y%m%d').nunique()} days · labels: " +
                      ", ".join(f"{k} {n}" for k, n in lab.items())).classes("text-sm text-gray-600")
             with ui.row().classes("items-center gap-3 w-full"):
                 lab_in = ui.select(known, label="Label", with_input=True, new_value_mode="add-unique",
                                    value=None).classes("w-64")
-                only_new = ui.checkbox("Only windows without a label", value=False)
+                only_new = ui.checkbox(f"Only {word.split()[-1]} without a label", value=False)
 
                 def apply(label):
                     ids = v["ids"][idx]
@@ -361,8 +376,8 @@ async def an_results(p, saver):
                         ids = ids[labels[idx] == ""]
                     st_ = store(p)
                     st_.set(det, ids, label)
-                    ui.notify((f"Labelled {len(ids)} windows '{label}'" if label else
-                               f"Removed the labels of {len(ids)} windows"), type="positive")
+                    ui.notify((f"Labelled {len(ids)} {word} '{label}'" if label else
+                               f"Removed the labels of {len(ids)} {word}"), type="positive")
                     dlg.close()
                     background_tasks.create(draw())
 
@@ -373,12 +388,12 @@ async def an_results(p, saver):
             with ui.tabs().classes("w-full") as tabs:
                 ui.tab("feat", "Features")
                 ui.tab("ex", "Contours" if det == "whistle" else "Click spectra")
-                ui.tab("win", "Windows")
+                ui.tab("win", "Table")
             with ui.tab_panels(tabs, value="feat").classes("w-full"):
                 with ui.tab_panel("feat"):
-                    ui.label("Its windows (colour) against all windows (grey). First: the features where it "
+                    ui.label(f"Its {word} (colour) against all {word} (grey). First: the features where it "
                              "differs most.").classes("text-xs text-gray-500")
-                    pick = ui.select({c_: nice(c_, names[det]) for c_ in cols}, multiple=True, value=top,
+                    pick = ui.select({c_: nice(c_, names) for c_ in cols}, multiple=True, value=top,
                                      label="Features shown").classes("w-full").props("use-chips")
                     hs = ImageSlot("w-full")
                     pick.on_value_change(lambda e: fill_hist(e.value))
@@ -388,17 +403,17 @@ async def an_results(p, saver):
                     show = ["w_start"] + top
                     tb = w.iloc[idx[:2000]][show].copy()
                     if len(idx) > 2000:
-                        ui.label(f"The first 2000 of {len(idx)} windows").classes("text-xs text-gray-500")
+                        ui.label(f"The first 2000 of {len(idx)} {word}").classes("text-xs text-gray-500")
                     tb.insert(0, "label", labels[idx[:2000]])
                     tb["w_start"] = pd.to_datetime(tb["w_start"], unit="s", utc=True).dt.strftime(
                         "%Y-%m-%d %H:%M:%S")
-                    tb = tb.rename(columns={"w_start": "start (UTC)", **{c_: nice(c_, names[det]) for c_ in top}})
+                    tb = tb.rename(columns={"w_start": "start (UTC)", **{c_: nice(c_, names) for c_ in top}})
                     table(tb.round(3).reset_index(drop=True), rows=10)
 
         async def fill_hist(chosen):
             hs.img.set_visibility(False)
             if chosen:
-                await hs.fill(lambda: hist_figure(w, list(chosen)[:12], sel, names[det], colour))
+                await hs.fill(lambda: hist_figure(w, list(chosen)[:12], sel, names, colour, word.split()[-1]))
         dlg.open()
         await fill_hist(top)
         if det == "whistle" and "contours" in v:

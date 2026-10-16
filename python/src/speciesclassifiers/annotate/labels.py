@@ -1,8 +1,8 @@
 """Labels given to windows (by labelling clusters), kept apart from the clusters so they survive
 reclustering, and their export as annotations.
 
-Labels live in ``labels/labels.json`` in the project: {detection type: {window id: label}}, a window id
-being its start time (Unix s, 3 decimals). Labelling a cluster labels its windows at that moment;
+Labels live in ``labels/labels.json`` in the project: {detection type: {id: label}}, the id being a
+window's start time (Unix s, 3 decimals), or a single detection's start time and counter. Labelling a cluster labels its windows at that moment;
 reclustering keeps every window's label.
 """
 
@@ -14,7 +14,19 @@ import pandas as pd
 
 
 def window_ids(windows):
+    """Ids of windows (start time) or single detections (``unit_id``: start time and a counter, as several
+    detections can start at once)."""
+    if "unit_id" in windows:
+        return windows["unit_id"].astype(str).tolist()
     return [f"{t:.3f}" for t in windows["w_start"].to_numpy(float)]
+
+
+def unit_ids(starts):
+    """Unique ids for detections: start time (3 decimals), plus ``_k`` for the k-th other detection
+    starting in the same millisecond."""
+    s = pd.Series([f"{t:.3f}" for t in np.asarray(starts, float)])
+    k = s.groupby(s).cumcount()
+    return np.where(k == 0, s, s + "_" + k.astype(str)).tolist()
 
 
 class LabelStore:

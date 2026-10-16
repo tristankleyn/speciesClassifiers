@@ -56,9 +56,26 @@ def test_annotate_workflow_example(tmp_path):
     p = Project.create(tmp_path / "an", "annotate", config=WORKFLOWS["annotate"].example())
     run(p.folder)
     assert set(p.stage_states().values()) == {"done"}
-    for det in ("whistle", "click"):
+    for det, unit in (("whistle", "detection"), ("click", "window")):      # the defaults
         m = load_pickle(an_map_file(p, det))
         assert {"w_start", "w_end", "x", "y", "cluster"} <= set(m.columns) and m["cluster"].max() >= 1
+        assert (m["unit"] == unit).all()
+    from speciesclassifiers.project.workflows import _windows_file
+    w = load_pickle(_windows_file(p, "whistle"))
+    assert w["unit_id"].is_unique and "cidx" in w and "duration_s" in w
+    cfg = p.config()                                  # single clicks
+    cfg["settings"]["units"]["click"] = "detection"
+    p.save_config(cfg)
+    run(p.folder)
+    assert p.stage_states()["windows"] == "done"
+    w = load_pickle(_windows_file(p, "click"))
+    assert {"peak_hz", "ici_prev_s", "unit_id"} <= set(w.columns) and w["unit_id"].is_unique
+    assert (load_pickle(an_map_file(p, "click"))["unit"] == "detection").all()
+
+
+def test_unit_ids():
+    from speciesclassifiers.annotate.labels import unit_ids
+    assert unit_ids([1.0, 1.0, 2.0, 1.0004]) == ["1.000", "1.000_1", "2.000", "1.000_2"]
 
 
 def test_map_figure_and_viewer_helpers():

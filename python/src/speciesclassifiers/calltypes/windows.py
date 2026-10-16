@@ -264,6 +264,17 @@ def feature_catalog(detector="whistle"):
     """The features a detection type offers, as [{"key", "group", "label", "default"}]. A key is a window
     column, except ``freq_profile`` (all ``prof_*`` columns). Level-dependent features (SNR) and the click
     count are off by default."""
+    if detector == "whistle_detection":          # one contour: its own measurements
+        return [{"key": k, "group": "Contour", "label": PARAM_LABELS[k], "default": True} for k in AGG_PARAMS] + \
+            [{"key": "snr_db", "group": "Level (depends on distance)", "label": "SNR", "default": False}]
+    if detector == "click_detection":            # one click: its spectrum and the interval to the previous click
+        from .clicks import CLICK_FEATURES
+        out = [{"key": m, "group": "Click spectrum", "label": CLICK_FEATURES[f"click_{m}_median"][1],
+                "default": True} for m in ("peak_hz", "centroid_hz", "bw3_hz", "bw10_hz")]
+        return out + [{"key": "click_profile", "group": "Click spectrum profile",
+                       "label": "share of power per frequency band", "default": True},
+                      {"key": "ici_prev_s", "group": "Inter-click interval", "label": "interval to the previous click",
+                       "default": True}]
     if detector == "click":
         from .clicks import CLICK_FEATURES
         return [{"key": k, "group": g, "label": lab, "default": d} for k, (g, lab, d) in CLICK_FEATURES.items()]
