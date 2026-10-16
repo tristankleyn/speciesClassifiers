@@ -15,6 +15,12 @@ SYMBOLS = ["circle", "square", "diamond", "triangle-up", "cross", "star", "trian
 GREY = "#b8b8b8"
 UNLABELLED = "(unlabelled)"
 _CACHE = {}
+_STATE = {}           # per project: detection type, colouring and settings panel shown on the map page
+
+
+def load_json(path):
+    from speciesclassifiers.project.workflows import read_json
+    return read_json(path, {})
 
 
 def style(i):
@@ -265,16 +271,60 @@ async def an_results(p, saver):
     if not dets:
         ui.label("No map yet: go to Run.").classes("text-gray-600")
         return
-    st = {"det": dets[0], "color": "cluster"}
+    st = _STATE.setdefault(str(p.folder), {"det": dets[0], "color": "cluster"})   # kept when the page rebuilds
+    if st["det"] not in dets:
+        st["det"] = dets[0]
+
+    def switch(**kw):
+        st.update(kw)
+        if "det" in kw:
+            settings_box.refresh()
+        background_tasks.create(draw())
 
     with ui.row().classes("w-full items-center gap-4"):
         if len(dets) > 1:
             ui.toggle({d: d.capitalize() + "s" for d in dets}, value=st["det"],
-                      on_change=lambda e: (st.update(det=e.value), background_tasks.create(draw()))).props("dense no-caps")
-        ui.toggle({"cluster": "Colour by cluster", "label": "Colour by label"}, value="cluster",
-                  on_change=lambda e: (st.update(color=e.value), background_tasks.create(draw()))).props("dense no-caps")
+                      on_change=lambda e: switch(det=e.value)).props("dense no-caps")
+        ui.toggle({"cluster": "Colour by cluster", "label": "Colour by label"}, value=st["color"],
+                  on_change=lambda e: switch(color=e.value)).props("dense no-caps")
         ui.label("Click a point to view and label its cluster. Scroll to zoom; double-click to reset.").classes(
             "text-xs text-gray-500")
+
+    @ui.refreshable
+    def settings_box():
+        from .settings import cluster_specs
+        from .widgets import field
+        det = st["det"]
+        info = (load_json(p.folder / "cluster" / "info.json") or {}).get(det, {})
+        used = info.get("params") or {}
+        with ui.expansion(f"Clustering settings ({det}s): change and recluster", icon="tune",
+                          value=st.get("open", False), on_value_change=lambda e: st.update(open=e.value)
+                          ).classes("w-full border rounded"):
+            ui.label("Changing only the cluster settings (first three) reclusters in seconds; changing the map "
+                     "settings makes a new map (UMAP), which takes longer. Labels are kept: they belong to the "
+                     "points, not the clusters.").classes("text-xs text-gray-500")
+            specs = cluster_specs(det)
+            with ui.grid(columns=2).classes("w-full gap-x-6"):
+                for spec in specs:
+                    field(saver, {**spec, "default": used.get(spec["key"].split(".")[-1])})
+            with ui.row().classes("items-center gap-3 mt-2"):
+                btn = ui.button("Recluster", icon="refresh", on_click=lambda: recluster(btn, note))
+                note = ui.label().classes("text-sm text-gray-600")
+                if p.is_running():
+                    btn.disable()
+                    note.text = "Running..."
+
+    def recluster(btn, note):
+        from speciesclassifiers.project import start_background
+        if p.is_running():
+            ui.notify("Already running", type="warning")
+            return
+        start_background(p.folder, ["cluster"])
+        btn.disable()
+        note.text = "Reclustering... the map reloads when it's done"
+        with note:
+            pass
+    settings_box()
     summary = ui.row().classes("w-full items-center gap-2")
     with ui.row().classes("w-full no-wrap items-start gap-4"):
         holder = ui.column().classes("grow min-w-0")

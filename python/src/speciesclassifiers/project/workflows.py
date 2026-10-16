@@ -1560,14 +1560,14 @@ def an_cluster(p, cfg):
     out = p.stage_dir("cluster")
     for f in list(out.glob("map_*")):
         f.unlink()
-    info = {}
+    info = {}         # (embedding_*.npz is kept: reused while the features and map settings are the same)
     for det in ct_detectors(cfg):
         w = load_pickle(_windows_file(p, det))
         key = an_feature_key(cfg, det)
         chosen = (cfg["settings"].get("features") or {}).get(key)
         cols = feature_columns(w.columns, chosen or default_features_(key))
         print(f"{det}s ({'single detections' if an_unit(cfg, det) == 'detection' else 'windows'}):")
-        m, i = embed_and_cluster(w, cols, an_cluster_params(cfg, det))
+        m, i = embed_and_cluster(w, cols, an_cluster_params(cfg, det), cache=out / f"embedding_{det}.npz")
         m.insert(0, "w_start", w["w_start"].to_numpy())
         m.insert(1, "w_end", w["w_end"].to_numpy())
         m["unit"] = an_unit(cfg, det)
