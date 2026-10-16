@@ -42,18 +42,20 @@ def click_events(clicks):
 def detector_windows(detector, raw, lib):
     """Raw detections of one type -> (windows, events for block counts), with the library's settings."""
     if detector == "click":
-        from .clicks import ClickWindowParams, click_windows, prepare_clicks
+        from .clicks import ClickWindowParams, prepare_clicks
+        from .units import click_points
         wp = {k: v for k, v in lib["window_params"].items() if k in ClickWindowParams.__dataclass_fields__}
         c = prepare_clicks(raw)
-        return click_windows(c, ClickWindowParams(**wp)), click_events(c)
+        return click_points(c, ClickWindowParams(**wp)), click_events(c)
     from .contours import ContourParams, prepare_contours
-    from .windows import WindowParams, make_windows, window_features
+    from .units import contour_points
+    from .windows import WindowParams
     cp, wp = ContourParams(**lib["contour_params"]), WindowParams(**lib["window_params"])
     contours, points = prepare_contours(raw, cp)
     if not len(contours):
         return pd.DataFrame(columns=["w_start", "w_end"]), pd.DataFrame(columns=["start", "end", "mean_freq_hz",
                                                                                  "duration_s"])
-    return window_features(make_windows(contours, wp), contours, points, wp), contours
+    return contour_points(contours, points, wp), contours
 
 
 def _key(t, blk):

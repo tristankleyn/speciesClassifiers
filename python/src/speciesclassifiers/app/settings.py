@@ -362,6 +362,32 @@ ANNOTATE += [("Whistle clustering", [dict(s, when=USE_WHISTLES) for s in cluster
              ("Click clustering", [dict(s, when=USE_CLICKS) for s in cluster_specs("click")])]
 
 
+# call types: single detections or windows (added after the copy above, so cluster-and-label keeps its own)
+CT_UNIT_W, CT_UNIT_C = "settings.windows.unit", "settings.clicks.unit"
+for _title, _specs in CALLTYPES:
+    for _s in _specs:
+        if _title == "Whistle windows":
+            _s["also"] = (CT_UNIT_W, "window")
+        elif _title == "Click windows" and "ici" not in _s["key"]:
+            _s["also"] = (CT_UNIT_C, "window")
+    if _title == "Whistle contours":
+        _specs.append({"key": "settings.features.whistle_detection", "label": "Contour features used",
+                       "kind": "features", "detector": "whistle_detection", "when": USE_WHISTLES,
+                       "also": (CT_UNIT_W, "detection")})
+    if _title == "Click spectrum":
+        _specs.append({"key": "settings.features.click_detection", "label": "Click features used",
+                       "kind": "features", "detector": "click_detection", "when": USE_CLICKS,
+                       "also": (CT_UNIT_C, "detection")})
+CALLTYPES.insert(0, ("What is clustered", [
+    {"key": CT_UNIT_W, "label": "Whistles", "kind": "select", "when": USE_WHISTLES, "default": "window",
+     "options": {"window": "windows of contours", "detection": "each contour"},
+     "help": "single contours: their own shape; windows: what is heard together"},
+    {"key": CT_UNIT_C, "label": "Clicks", "kind": "select", "when": USE_CLICKS, "default": "window",
+     "options": {"window": "windows of clicks (trains)", "detection": "each click"},
+     "help": "windows carry inter-click interval patterns; single clicks only their spectrum and the interval "
+             "to the previous click"}]))
+
+
 def _an_defaults():
     from speciesclassifiers.project.workflows import an_defaults
     return an_defaults()
@@ -372,7 +398,8 @@ _fill_defaults(ANNOTATE, _an_defaults())
 SETTINGS = {"randomforest": RANDOMFOREST, "calltypes": CALLTYPES, "delphinid": DELPHINID, "annotate": ANNOTATE}
 # values of keys that older projects may not have yet
 CONDITION_DEFAULTS = {"data.use_whistles": True, "data.use_clicks": False, "decision.method": "multiply",
-                      "settings.units.whistle": "detection", "settings.units.click": "window"}
+                      "settings.units.whistle": "detection", "settings.units.click": "window",
+                      "settings.windows.unit": "window", "settings.clicks.unit": "window"}
 
 
 def applies(spec, cfg):

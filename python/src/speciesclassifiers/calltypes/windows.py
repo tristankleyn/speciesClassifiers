@@ -20,7 +20,7 @@ AGG_PARAMS = ["duration_s", "start_freq_hz", "end_freq_hz", "min_freq_hz", "max_
 
 # Window columns that are labels/metadata, never features
 WINDOW_META = {"w_start", "w_end", "ann_idx", "day", "label", "uncertain", "cluster", "label_source",
-               "block"}
+               "block", "cidx"}
 
 
 @dataclass
@@ -28,6 +28,8 @@ class WindowParams:
     """Window settings.
 
     mode                  "sliding" or "annotation" (one window around each annotated call)
+    unit                  "window" (windows of contours) or "detection" (each contour on its own: its
+                          shape measurements; see ``units``)
     window_s, overlap     sliding window length (s) and overlap (0.5 = 50 %)
     annotation_pad_s      annotation mode: pad each call by this much (s)
     assign_by             a contour belongs to a window if it "overlap"s it or its "midpoint" is inside
@@ -40,6 +42,7 @@ class WindowParams:
     """
 
     mode: str = "sliding"
+    unit: str = "window"
     window_s: float = 4.0
     overlap: float = 0.5
     annotation_pad_s: float = 0.1

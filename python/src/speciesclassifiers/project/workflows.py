@@ -493,9 +493,17 @@ def ct_uses_forest(cfg):
     return (cfg.get("decision") or {}).get("method") == "forest"
 
 
+def ct_unit(cfg, det):
+    """Units of a detection type: "window" or "detection" (each contour / click)."""
+    return ((cfg["settings"].get("windows" if det == "whistle" else "clicks") or {}).get("unit")) or "window"
+
+
 def ct_features(cfg, det):
     """The chosen feature keys of a detection type (None = the defaults)."""
     from speciesclassifiers.calltypes.windows import default_features
+    if ct_unit(cfg, det) == "detection":
+        key = f"{det}_detection"
+        return (cfg["settings"].get("features") or {}).get(key) or default_features(key)
     f = (cfg["settings"].get("features") or {}).get(det)
     if f is None and det == "click":
         return default_features("click")
@@ -575,7 +583,8 @@ def ct_clicks(p, cfg):
 
 
 def ct_windows(p, cfg):
-    from speciesclassifiers.calltypes import label_windows, make_windows, window_features
+    from speciesclassifiers.calltypes import label_windows
+    from speciesclassifiers.calltypes.units import click_points, contour_points, label_detections
     from speciesclassifiers.calltypes.windows import label_windows_by_period
     dets = ct_detectors(cfg)
     if not dets:
@@ -588,17 +597,19 @@ def ct_windows(p, cfg):
     if "whistle" in dets:
         c, pts = load_pickle(p.folder / "contours" / "contours.pkl")
         wp = ct_window_params(cfg)
-        w = window_features(make_windows(c, wp), c, pts, wp)
+        w = contour_points(c, pts, wp)
         if periods:     # each window takes the labels of the period it falls in
             w = label_windows_by_period(w.assign(label="none"), calls, columns=cols)
             w.loc[w["label_source"] != "unannotated", "label"] = "untyped"     # no call types
+        elif wp.unit == "detection":   # each contour: the call covering most of it
+            w = label_detections(w, calls, carry=list(dict.fromkeys([*carry, "event_id"])))
         else:
             w = label_windows(w, calls, wp, carry=list(dict.fromkeys([*carry, "event_id"])))
         wins["whistle"] = w
     if "click" in dets:
-        from speciesclassifiers.calltypes.clicks import click_windows, event_periods
+        from speciesclassifiers.calltypes.clicks import event_periods
         clicks = load_pickle(p.folder / "clicks" / "clicks.pkl")
-        w = click_windows(clicks, ct_click_params(cfg))
+        w = click_points(clicks, ct_click_params(cfg))
         per = calls if periods else event_periods(calls, cols)    # call annotations: the event's span
         w = label_windows_by_period(w.assign(label="none"), per, columns=cols)
         w.loc[w["label_source"] != "unannotated", "label"] = "untyped"
@@ -1487,23 +1498,15 @@ def an_detections(det, data, cfg):
     """One row per detection with ``w_start``/``w_end`` (its start/end), ``unit_id`` and its measurements
     (contours: shape; clicks: spectrum and the interval to the previous click)."""
     from speciesclassifiers.annotate.labels import unit_ids
+    from speciesclassifiers.calltypes.units import click_units, contour_units
     if det == "whistle":
         c, _ = data
-        from speciesclassifiers.calltypes.windows import AGG_PARAMS
-        cols = [x for x in [*AGG_PARAMS, "snr_db", "amplitude_db", "day"] if x in c]
-        d = c[cols].copy()
-        d.insert(0, "cidx", np.arange(len(c)))          # row in contours.pkl (for drawing the contour)
-        d.insert(0, "w_end", c["end"].to_numpy(float))
-        d.insert(0, "w_start", c["start"].to_numpy(float))
+        d = contour_units(c)
+        if "amplitude_db" in c:
+            d["amplitude_db"] = c["amplitude_db"].to_numpy()
     else:
-        c = data
-        gap = np.diff(c["start"].to_numpy(float), prepend=np.nan)
         cp = ct_click_params(cfg)
-        gap[(gap > cp.max_ici_s) | (gap <= cp.min_ici_s)] = np.nan
-        d = c.drop(columns=["start", "end", "duration_s"]).copy()
-        d.insert(0, "w_end", c["end"].to_numpy(float))
-        d.insert(0, "w_start", c["start"].to_numpy(float))
-        d["ici_prev_s"] = gap
+        d = click_units(data, cp.max_ici_s, cp.min_ici_s)
     d = d.sort_values("w_start", kind="mergesort").reset_index(drop=True)
     d["unit_id"] = unit_ids(d["w_start"])
     return d

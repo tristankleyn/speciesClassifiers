@@ -124,6 +124,8 @@ class ClickWindowParams:
     min_clicks         windows with fewer clicks are dropped
     max_ici_s          gaps between clicks longer than this (s) are not intervals (pauses between trains)
     min_ici_s          gaps shorter than this (s) are left out (e.g. echoes or multipath of one click)
+    unit               "window" (windows of clicks) or "detection" (each click: its spectrum and the interval
+                       to the previous click; see ``units``)
     """
 
     window_s: float = 10.0
@@ -131,6 +133,7 @@ class ClickWindowParams:
     min_clicks: int = 5
     max_ici_s: float = 1.0
     min_ici_s: float = 0.0
+    unit: str = "window"
 
     def to_dict(self):
         return asdict(self)

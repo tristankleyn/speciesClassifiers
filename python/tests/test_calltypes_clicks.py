@@ -84,12 +84,15 @@ def test_merge_evidence():
     assert np.allclose(w2.iloc[0], np.array([1.6, 0.4, 1.0]) / 3.0)   # weight 0: clicks ignored
 
 
-def test_standalone_matches_multi(tmp_path):
+@pytest.mark.parametrize("unit", ["window", "detection"])
+def test_standalone_matches_multi(tmp_path, unit):
     from speciesclassifiers.calltypes import load_library
     from speciesclassifiers.calltypes.detectors import classify_multi
     from speciesclassifiers.project import WORKFLOWS, Project, run
     from speciesclassifiers.project.workflows import load_clicks, load_whistles
     p = Project.create(tmp_path / "ct", "calltypes", config=WORKFLOWS["calltypes"].example())
+    if unit == "detection":            # single contours and single clicks
+        p.update_config({"settings": {"windows": {"unit": "detection"}, "clicks": {"unit": "detection"}}})
     assert run(p.folder, ["contours", "clicks", "windows", "discover", "library"]) == "finished"
     lib = load_library(p.folder / "library" / "library.json")
     c, k = EX / "contours_example_synthetic.json.gz", EX / "clicks_example_synthetic.csv.gz"
@@ -110,5 +113,22 @@ def test_standalone_matches_multi(tmp_path):
             assert np.allclose(pd.to_numeric(x).astype(float), pd.to_numeric(y).astype(float), equal_nan=True), col
         else:
             assert (x.fillna("").astype(str) == y.fillna("").astype(str).replace("None", "")).all(), col
-    assert {"Y", "E1", "E2", "noise"} <= set(b["decision"])
-    assert "click_peak_hz_median" in lib["detectors"]["click"]["feature_spec"]["cols"]
+    if unit == "window":
+        assert {"Y", "E1", "E2", "noise"} <= set(b["decision"])
+        assert "click_peak_hz_median" in lib["detectors"]["click"]["feature_spec"]["cols"]
+    else:
+        cols = lib["detectors"]["click"]["feature_spec"]["cols"]
+        assert "ici_prev_s" in cols and "ici_median_s" not in cols
+        assert "duration_s" in lib["detectors"]["whistle"]["feature_spec"]["cols"]
+        assert lib["detectors"]["whistle"]["window_params"]["unit"] == "detection"
+        assert len(set(b["decision"]) - {"uncertain", "no_detections"}) >= 2
+
+
+def test_label_detections():
+    from speciesclassifiers.calltypes.units import label_detections
+    u = pd.DataFrame({"w_start": [0.0, 10.0, 20.0, 30.0, 40.0], "w_end": [1.0, 11.0, 21.0, 31.0, 41.0]})
+    calls = pd.DataFrame({"start": [-1.0, 10.8, 19.5, 19.6, 50.0], "end": [2.0, 12.0, 21.5, 21.5, 51.0],
+                          "label": ["A", "B", "C", "D", "E"], "event_id": ["e1"] * 5})
+    w = label_detections(u, calls, carry=["event_id"])
+    assert list(w["label"]) == ["A", "partial", "mixed", "none", "none"]
+    assert w.loc[0, "event_id"] == "e1" and w.loc[4, "event_id"] == "none"

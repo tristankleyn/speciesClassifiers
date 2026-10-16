@@ -216,6 +216,18 @@ def window_features(ws, contours, wp, agg_params):
     return out
 
 
+def contour_units(contours, agg_params):
+    """Single contours as units (library ``window_params.unit`` = "detection"): one feature dict each."""
+    return [{"w_start": c["start"], "w_end": c["end"], "day": _day(c["start"]), "contour_idx": [i],
+             **{a: c["p"][a] for a in agg_params}, "snr_db": c["snr_db"]} for i, c in enumerate(contours)]
+
+
+def contour_points(contours, wp, agg_params):
+    if wp.get("unit") == "detection":
+        return contour_units(contours, agg_params)
+    return window_features(make_windows(contours, wp), contours, wp, agg_params)
+
+
 # ------------------------------------------------------------------------ classification ---
 def transform(feats, lib):
     """Frozen feature transform -> standardised matrix (windows x features)."""
@@ -302,12 +314,14 @@ def blocks_from_windows(windows, contours, lib, period=None):
         ws = by_block.get(b, [])
         cidx = sorted({j for w in ws for j in w["contour_idx"]})
         mf = [contours[j]["p"]["mean_freq_hz"] for j in cidx]
+        single = bool(ws) and "mean_abs_slope_hz_s_mean" not in ws[0] and "mean_abs_slope_hz_s" in ws[0]
+        slope_k, freq_k = ("mean_abs_slope_hz_s", "mean_freq_hz") if single else \
+            ("mean_abs_slope_hz_s_mean", "pts_mean_freq_hz")
         r = {"block_start": b / NS, "block_end": (b + blk) / NS, "n_windows": len(ws),
              "n_assigned": sum(1 for w in ws if w["cluster"] >= 0), "n_contours": len(cidx),
              "block_meanfreq_range_hz": float(max(mf) - min(mf)) if mf else None,
-             "block_median_abs_slope_hz_s": _median([w.get("mean_abs_slope_hz_s_mean", np.nan) for w in ws])
-             if ws else None,
-             "block_median_freq_hz": _median([w.get("pts_mean_freq_hz", np.nan) for w in ws]) if ws else None,
+             "block_median_abs_slope_hz_s": _median([w.get(slope_k, np.nan) for w in ws]) if ws else None,
+             "block_median_freq_hz": _median([w.get(freq_k, np.nan) for w in ws]) if ws else None,
              "block_median_contour_s": float(np.median([contours[j]["p"]["duration_s"] for j in cidx]))
              if cidx else None}
         for t in lib["tasks"]:
@@ -548,13 +562,28 @@ def merge_evidence(rows, bases, weights=None):
     return dict(zip(classes, ev / ev.sum()))
 
 
+def click_units(clicks, cwp):
+    """Single clicks as units: spectrum measurements and the interval to the previous click (missing if
+    longer than ``max_ici_s`` or not longer than ``min_ici_s``)."""
+    out = []
+    for i, c in enumerate(clicks):
+        gap = c["start"] - clicks[i - 1]["start"] if i else np.nan
+        if not (cwp.get("min_ici_s", 0.0) < gap <= cwp["max_ici_s"]):
+            gap = np.nan
+        u = {"w_start": c["start"], "w_end": c["end"], "day": _day(c["start"]), "contour_idx": [i]}
+        u.update({k: v for k, v in c.items() if k in CLICK_MEASURES or k.startswith("csp_")})
+        u["ici_prev_s"] = float(gap)
+        out.append(u)
+    return out
+
+
 def detector_windows(det, raw, lib):
+    wp = lib["window_params"]
     if det == "click":
         ev = prepare_clicks(raw, lib.get("spectrum_params"))
-        return click_windows(ev, lib["window_params"]), ev
+        return (click_units(ev, wp) if wp.get("unit") == "detection" else click_windows(ev, wp)), ev
     contours = prepare_contours(raw, lib["contour_params"])
-    return window_features(make_windows(contours, lib["window_params"]), contours, lib["window_params"],
-                           lib["agg_params"]), contours
+    return contour_points(contours, wp, lib["agg_params"]), contours
 
 
 def _unb64(d):
@@ -725,8 +754,7 @@ def classify(raw_contours, lib, period=None):
         raw = raw_contours if isinstance(raw_contours, dict) else {"whistle": raw_contours}
         return classify_multi(raw, lib, period)
     contours = prepare_contours(raw_contours, lib["contour_params"])
-    feats = window_features(make_windows(contours, lib["window_params"]), contours, lib["window_params"],
-                            lib["agg_params"])
+    feats = contour_points(contours, lib["window_params"], lib["agg_params"])
     return pathway_blocks(feats, contours, lib, period)
 
 

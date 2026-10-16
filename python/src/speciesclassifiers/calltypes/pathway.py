@@ -174,14 +174,15 @@ def classify_contours_pathway(whistles, lib, period=None):
     """Whistle table -> (windows, blocks, contours) through a pathway library."""
     from .contours import ContourParams, prepare_contours
     from .library import block_votes
-    from .windows import WindowParams, make_windows, window_features
+    from .units import contour_points
+    from .windows import WindowParams
     cp, wp = ContourParams(**lib["contour_params"]), WindowParams(**lib["window_params"])
     contours, points = prepare_contours(whistles, cp)
     if not len(contours):
         empty = pd.DataFrame(columns=["w_start", "w_end", "cluster"])
         return empty, block_votes(empty, pd.DataFrame(columns=["start", "end", "mean_freq_hz", "duration_s"]),
                                   lib, period), contours
-    w = window_features(make_windows(contours, wp), contours, points, wp)
+    w = contour_points(contours, points, wp)
     return w, pathway_blocks(w, contours, lib, period), contours
 
 

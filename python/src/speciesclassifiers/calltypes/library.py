@@ -20,7 +20,7 @@ import pandas as pd
 
 from .contours import ContourParams, prepare_contours
 from .evaluate import apply_feature_spec
-from .windows import AGG_PARAMS, WindowParams, make_windows, pair_intervals, window_features
+from .windows import AGG_PARAMS, WindowParams, pair_intervals
 
 LIBRARY_FORMAT = "speciesclassifiers.calltypes.library/1"
 RULE_OPS = {"<": np.less, "<=": np.less_equal, ">": np.greater, ">=": np.greater_equal,
@@ -286,6 +286,9 @@ def block_votes(windows, contours, lib, period=None):
         keys = [k for k in keys if k < period[1] * 1e9 and k + blk > period[0] * 1e9]
     mf = contours["mean_freq_hz"].to_numpy(float)
     dur = contours["duration_s"].to_numpy(float)
+    single = "mean_abs_slope_hz_s_mean" not in windows and "mean_abs_slope_hz_s" in windows   # single contours
+    slope_col = "mean_abs_slope_hz_s" if single else "mean_abs_slope_hz_s_mean"
+    freq_col = "mean_freq_hz" if single else "pts_mean_freq_hz"
     rows = []
     for b in keys:
         wi = np.where(bstart == b)[0]
@@ -294,9 +297,8 @@ def block_votes(windows, contours, lib, period=None):
         r = {"block_start": b / NS, "block_end": (b + blk) / NS, "n_windows": len(wi),
              "n_assigned": int((g["cluster"] >= 0).sum()) if len(wi) else 0, "n_contours": len(cidx),
              "block_meanfreq_range_hz": float(mf[cidx].max() - mf[cidx].min()) if len(cidx) else None,
-             "block_median_abs_slope_hz_s": _median(g["mean_abs_slope_hz_s_mean"])
-             if len(wi) and "mean_abs_slope_hz_s_mean" in g else None,
-             "block_median_freq_hz": _median(g["pts_mean_freq_hz"]) if len(wi) and "pts_mean_freq_hz" in g else None,
+             "block_median_abs_slope_hz_s": _median(g[slope_col]) if len(wi) and slope_col in g else None,
+             "block_median_freq_hz": _median(g[freq_col]) if len(wi) and freq_col in g else None,
              "block_median_contour_s": float(np.median(dur[cidx])) if len(cidx) else None}
         for t in tasks:
             if t.get("classes"):      # multi-class: mean class probabilities of the assigned windows
@@ -347,7 +349,8 @@ def classify_contours(whistles, lib, period=None):
         empty = pd.DataFrame(columns=["w_start", "w_end", "cluster"])
         return empty, block_votes(empty, pd.DataFrame(columns=["start", "end", "mean_freq_hz", "duration_s"]),
                                   lib, period), contours
-    w = window_features(make_windows(contours, wp), contours, points, wp)
+    from .units import contour_points
+    w = contour_points(contours, points, wp)
     if not len(w):
         return w.assign(cluster=[]), block_votes(w.assign(cluster=[]), contours, lib, period), contours
     w = classify_windows(w, lib)
