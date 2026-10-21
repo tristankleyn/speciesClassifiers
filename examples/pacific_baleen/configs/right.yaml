@@ -1,0 +1,110 @@
+# Right whale — southern right whale (NZ, S Australia, South Georgia) + North Pacific right whale (v1).
+# Tonal calls only: gunshots, blows, pulsive growls and LF pulsive song calls excluded (RW002, RW004, RW009, RW018-RW022 gunshots).
+class: Right
+sd_inflation: 1.5
+individual_sd_ratio: 0.3                 # RWX09 (assumed)
+year_range: [2000, 2022]
+sampling_order: [context, population]    # contexts are population-specific, so draw context first (equal per context), then a population offering it
+drift: {}                                # none reported
+
+# Webster 2016 SDs were computed as SE*sqrt(n) and are wide; truncation ranges are the reported min-max.
+# "modulated" = smooth contour through f_start -> f_peak -> f_end (peak position uniform 0.2-0.8 of duration, assumed).
+# Harmonics: stacked up to max_hz (Webster "max ceiling incl. harmonics"); levels fall -3 to -9 dB per harmonic (assumed).
+shared_call_types: {}
+
+populations:
+
+  srw_new_zealand:
+    region: "Auckland Islands (Port Ross), NZ breeding ground"
+    call_types:
+      tonal_low:      {model: modulated, f_start: {mean: 117, sd: 55, range: [32, 375]}, f_peak: {mean: 133, sd: 28, range: [43, 281]}, f_end: {mean: 140, sd: 138, range: [32, 323]}, duration: {mean: 1.2, sd: 0.6, range: [0.2, 3.7]}, harmonics: {max_hz: {mean: 2087, range: [500, 4000]}}, src: RW001}
+      upcall:         {model: modulated, f_start: {mean: 87, sd: 27, range: [32, 293]}, f_peak: {mean: 121, sd: 27, range: [43, 281]}, f_end: {mean: 143, sd: 53, range: [35, 293]}, curvature: {uniform: [0, 0.6], note: "ends in upsweep"}, duration: {mean: 0.9, sd: 0.3, range: [0.3, 2.7]}, harmonics: {max_hz: {mean: 1197, range: [400, 3000]}}, src: RW003}
+      hybrid_tonal:   {model: modulated, f_start: {mean: 226, sd: 144, range: [32, 879]}, f_peak: {mean: 243, sd: 144, range: [54, 902]}, f_end: {mean: 245, sd: 144, range: [32, 949]}, duration: {mean: 1.4, sd: 0.5, range: [0.3, 2.7]}, tonal_fraction: {uniform: [0.3, 0.7], note: "only the tonal section emitted (assumed)"}, harmonics: {max_hz: {mean: 2500, range: [500, 4000]}}, src: RW005}
+      downcall:       {model: sweep, f_start: {mean: 203, sd: 54, range: [117, 387]}, f_end: {mean: 128, sd: 40, range: [43, 261]}, duration: {mean: 0.7, sd: 0.1, range: [0.3, 1.5]}, harmonics: {max_hz: {mean: 2673, range: [500, 4000]}}, src: RW006}
+      high:           {model: modulated, f_start: {mean: 332, sd: 145, range: [200, 1087]}, f_peak: {mean: 335, sd: 104, range: [164, 1131]}, f_end: {mean: 334, sd: 124, range: [117, 1206]}, duration: {mean: 1.2, sd: 0.6, range: [0.2, 3.8]}, harmonics: {max_hz: {mean: 3648, range: [1000, 4000]}}, src: RW007}
+      very_high:      {model: modulated, f_start: {mean: 748, sd: 163, range: [312, 1378]}, f_peak: {mean: 749, sd: 150, range: [355, 1348]}, f_end: {mean: 743, sd: 163, range: [340, 1418]}, duration: {mean: 0.7, sd: 0.3, range: [0.2, 2.0]}, harmonics: {max_hz: {mean: 2869, range: [1000, 4000]}}, src: RW008}
+      long_tonal_low: {model: modulated, f_start: {mean: 109, sd: 54, range: [47, 223]}, f_peak: {mean: 110, sd: 39, range: [70, 270]}, f_end: {mean: 110, sd: 39, range: [47, 211]}, duration: {mean: 4.6, sd: 2.2, range: [2.7, 15.5]}, harmonics: {max_hz: {mean: 1330, range: [400, 3000]}}, src: RW010}
+    call_mix:                             # tonal-type counts from RW001-RW010 (n), renormalised; upcall share then set per encounter
+      weights: {tonal_low: 764, upcall: 701, hybrid_tonal: 576, downcall: 181, high: 429, very_high: 185, long_tonal_low: 60}
+      upcall_share: {uniform: [0.3, 0.6], src: "RW011, RWX03 (winter 30-40%; up to 1.0 Feb-Apr)"}
+    contexts:
+      social_group: {template: srw_breeding, group_size: {uniform_int: [3, 10]}, callers: {uniform_int: [2, 5]}, src: RWX04}
+      mother_calf:  {template: srw_breeding, group_size: 2, callers: 1, src: RWX04}
+      lone:         {template: srw_breeding, group_size: 1, callers: 1, src: RWX04}
+
+  srw_s_australia:
+    region: "Fowlers Bay, S Australia (Australian right whales)"
+    call_types:
+      upcall:   {model: sweep, f_start: {mean: 70.3, sd: 12.0}, f_end: {mean: 181.1, sd: 32.9}, curvature: {uniform: [0, 0.6]}, duration: {mean: 0.73, sd: 0.16}, harmonics: {max_hz: {mean: 1197, range: [400, 3000], src: "RW003 (assumed same as NZ)"}}, src: RW014}
+      constant: {model: modulated, f_start: {mean: 82.3, sd: 19.0}, f_peak: {mean: 115, sd: 25, note: "between min/max (assumed)"}, f_end: {mean: 148.6, sd: 28.8, note: "min/max reported; direction randomised"}, reverse_p: 0.5, duration: {mean: 1.0, sd: 0.64, range: [0.2, 3.7]}, harmonics: {max_hz: {mean: 2087, range: [500, 4000]}}, src: RW015}
+      # n = 32 only: borrow NZ types for the rest of the repertoire (assumed shared SRW repertoire)
+      downcall:  {ref: populations.srw_new_zealand.call_types.downcall}
+      high:      {ref: populations.srw_new_zealand.call_types.high}
+      hybrid_tonal: {ref: populations.srw_new_zealand.call_types.hybrid_tonal}
+    call_mix:
+      weights: {upcall: 23, constant: 8, downcall: 4, high: 4, hybrid_tonal: 4, note: "borrowed types weighted low (assumed)"}
+    low_activity_p: 0.2                   # 20% of encounters at 5/h (1-20) (RWX05)
+    contexts:
+      social_group: {template: srw_breeding, group_size: {uniform_int: [3, 10]}, callers: {uniform_int: [2, 5]}}
+      mother_calf:  {template: srw_breeding, group_size: 2, callers: 1}
+      lone:         {template: srw_breeding, group_size: 1, callers: 1}
+
+  srw_south_georgia:
+    region: "South Georgia / Scotia Sea feeding ground"
+    call_types:
+      upcall: {model: sweep, f_start: {mean: 86, sd: 10, range: [63, 114]}, f_end: {mean: 145, sd: 23, range: [82, 223]}, contour: {power_law: "f = f_start + 62.8*t^0.652", src: RW012}, duration: {mean: 0.8, sd: 0.27}, harmonics: {max_hz: {mean: 1000, range: [300, 2000], note: assumed}}, src: "RW012; RW013 (92->173, 0.7 s) as alternative mode p 0.2"}
+      tonal_low: {ref: populations.srw_new_zealand.call_types.tonal_low, note: "assumed present at low weight"}
+    call_mix: {weights: {upcall: 0.85, tonal_low: 0.15, note: assumed}}
+    contexts:
+      lone:   {template: srw_breeding, label_context: lone_or_feeding, group_size: {uniform_int: [1, 3]}, callers: {uniform_int: [1, 2]}, rate_per_h: {lognormal_median: 20, range: [2, 100], note: assumed}}
+
+  nprw_bering:
+    region: "SE Bering Sea (eastern North Pacific right whale)"
+    call_types:
+      upcall:    {model: sweep, f_start: {mean: 89, range: [70, 110]}, f_end: {mean: 153, range: [120, 220]}, curvature: {uniform: [0, 0.6]}, duration: {mean: 0.7, range: [0.5, 1.0]}, harmonics: {max_hz: {mean: 800, range: [300, 1500], note: assumed}}, src: "RW016, RW017"}
+      downsweep: {model: sweep, f_start: {mean: 250, range: [200, 300]}, f_end: {mean: 120, range: [90, 150]}, duration: {mean: 1.0, sd: 0.1}, src: RW019}
+      moan:      {model: sweep, f_start: {mean: 160, range: [130, 190]}, f_end: {mean: 100, range: [80, 120]}, duration: {mean: 1.9, sd: 0.4}, src: RW021}
+      down_up:   {model: modulated, f_start: {mean: 130, range: [100, 160]}, f_peak: {mean: 95, range: [80, 110], note: "minimum, not peak"}, f_end: {mean: 140, range: [110, 180]}, duration: {mean: 1.0, range: [0.6, 1.5]}, note: "N Pacific-specific; no stats (assumed)", src: RW016}
+      constant:  {model: tone, f: {mean: 110, range: [80, 150]}, duration: {mean: 1.0, range: [0.5, 2]}, note: "no stats (assumed)", src: RW016}
+    contexts:
+      upcall_tonal:
+        group_size: {uniform_int: [1, 3]}
+        callers: {uniform_int: [1, 2]}
+        sequence: {type: irregular, rates_per_h: {upcall: {lognormal_median: 3, range: [0.5, 36]}, tonal: {uniform: [0, 4.3]}}, tonal_mix: {downsweep: 0.4, moan: 0.3, down_up: 0.2, constant: 0.1, note: assumed}, src: "RW018, RWX06"}
+        timeline:
+          dive_s: {lognormal_median: 200, range: [41, 726], src: RWX07}
+          surfacing_min: {uniform: [1, 3], silent: true, src: RWX07}
+          silent_spell_min: {lognormal_median: 30, range: [5, 180], src: RWX06}
+        range_km: {loguniform: [0.5, 75], src: "RWX08, RWX10"}
+        chorus_p: 0                       # RWX11
+        encounter_len_min: {loguniform: [30, 180]}
+      song:
+        callers: 1                        # one male per song session; same type never simultaneous (RWX08)
+        sequence:
+          type: song_tonal_units_only     # gunshots not emitted; only the tonal units of each song
+          song_type: {choice: [GS1, GS3], src: "RW019, RW021 (GS2, GS4 have no tonal units)"}
+          GS1: {song_s: {mean: 17.8, sd: 5.3}, emit: {downsweep: 1}, src: RW019}
+          GS3: {song_s: {mean: 132.1, sd: 29.9}, emit: {moan: {p: 0.05}}, src: RW021}
+          inter_song_gap_s: {uniform: [2, 20], note: assumed}
+        timeline:
+          session_h: {lognormal_median: 2, range: [0.5, 6], note: "assumed (RWX08)"}
+          dive_s: {lognormal_median: 200, range: [41, 726]}
+          silent_spell_min: {lognormal_median: 30, range: [5, 120]}
+        range_km: {loguniform: [0.5, 75]}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [30, 180]}
+
+context_templates:
+  srw_breeding:
+    vocal_p: 1.0
+    sequence:
+      type: bouts
+      rate_per_h: {lognormal_median: 80, range: [20, 200], src: RWX02}
+      bout_calls: {uniform_int: [5, 30], note: assumed}
+      inter_call_s: {lognormal_median: 20, range: [2, 120], note: assumed}
+    timeline:
+      silent_spell_min: {lognormal_median: 5, range: [1, 60], src: "RWX02 (assumed)"}
+      long_silence_p: 0.3                 # some encounters include 20-60 min silences (assumed)
+    range_km: {loguniform: [0.5, 50], src: RWX10}
+    chorus_p: 0                           # RWX11
+    encounter_len_min: {loguniform: [30, 120]}

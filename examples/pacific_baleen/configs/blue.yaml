@@ -1,0 +1,259 @@
+# Blue whale — Pacific + Southern Ocean (v1). See README.md for notation.
+class: Blue
+sd_inflation: 1.5                       # between-encounter SD inflation where not reported (assumed)
+individual_sd_ratio: 0.3                # within-caller SD / population SD (assumed; NZ song repeat 0.9 s vs population spread)
+year_range: [2000, 2022]                # simulated recording years
+sampling_order: [context, population]    # equal encounters per context, then a population offering it
+
+# Shared call types (used by several populations)
+shared_call_types:
+  D_call:
+    model: sweep                        # FM downsweep, highly variable sweep rate
+    f_start: {mean: 75.7, sd: 15.6, range: [60, 120], src: BM005}
+    f_end:   {mean: 39.3, sd: 9.9, range: [25, 60], src: BM005}
+    duration: {mean: 1.8, sd: 1.0, range: [1.0, 4.0], src: "BM005, BM007"}
+    curvature: {uniform: [-0.5, 0.5]}   # assumed; 0 = linear
+    levels_db: {f0: 0}
+  D_call_antarctic:
+    model: sweep
+    f_start: {mean: 76.3, sd: 15.6, range: [60, 90], src: "BM032; SD from BM005 (assumed)"}
+    f_end:   {mean: 40.0, sd: 9.9, range: [30, 50], src: "BM032, BM033"}
+    duration: {mean: 2.7, sd: 1.0, range: [1.0, 4.0], src: BM032}
+    curvature: {uniform: [-0.5, 0.5]}
+    levels_db: {f0: 0}
+
+drift:                                  # Hz/yr applied relative to ref_year (negative = falling)
+  ne_pacific.A_unit:  {rate: -0.32, ref_year: 2006, applies_to: overtone, src: BM012}
+  ne_pacific.B_unit:  {rate: -0.09, ref_year: 2006, applies_to: f0, src: "BM012 (-0.27 Hz/yr on 3rd harmonic)"}
+  se_pacific.*:       {rate: -0.10, ref_year: 2007, applies_to: carrier, src: BM020}
+  new_zealand.*:      {rate: -0.15, ref_year: 2013, applies_to: all, src: "BM022-BM024"}
+  antarctic.Z_call:   {rate: -0.135, ref_year: 2002, applies_to: all, within_season: -0.45, src: BM030}
+  nw_pacific.*:       {rate: 0.0, ref_year: 1997, note: "not reported; SD inflated instead"}
+
+populations:
+
+  ne_pacific:
+    region: "NE Pacific (California to Gulf of Alaska, Hawaii, Palmyra)"
+    variants: {choice: [B1, B2], src: "BM013-BM014: B1 S California/WA/Palmyra, B2 Gulf of Alaska/Hawaii"}
+    call_types:
+      A_unit:
+        model: pulsed_band              # pulsed unit: low component + dominant overtone band
+        components:
+          - {f_start: {mean: 15.3, sd: 0.4}, f_end: {mean: 15.3, sd: 0.4}, level_db: -6, src: BM008}
+          - {f_start: {mean: 89.9, sd: 2.3}, f_end: {mean: 86.3, sd: 1.9}, level_db: 0, src: BM001}
+        pulse_rate: {mean: 1.2, range: [1.15, 1.25], src: BM012}   # too slow to show as sidebands
+        duration: {mean: 15.2, sd: 1.7, src: BM001}
+      B_unit:
+        model: harmonic
+        f0_start: {mean: 17.4, sd: 0.3, src: "BM002 (52.2/3), BM009 (18.0)"}
+        f0_end:   {mean: 15.5, sd: 0.3, src: "BM002 (46.6/3), BM009 (16.1)"}
+        downstep: {B1: null, B2: {at_s: {uniform: [10, 15]}, size_hz: {mean: 0.5, range: [0.3, 0.7]}}, src: "BM014 (~1.5 Hz on 3rd harmonic)"}
+        harmonics: [1, 2, 3, 4]
+        levels_db: {1: 0, 2: {uniform: [-12, -3]}, 3: {mean: -10.3, range: [-16, 0]}, 4: {uniform: [-20, -10]}}   # 3rd vs 1st from McDonald 2001; others assumed
+        duration: {mean: 16.6, sd: 1.2, src: "BM002, BM009"}
+      C_unit:
+        model: tone
+        f_start: {mean: 11.0, sd: 0.4, src: BM010}
+        f_end:   {mean: 11.7, sd: 0.4, src: BM010}
+        duration: {mean: 8.7, sd: 1.9, src: BM010}
+      D_call: {ref: shared_call_types.D_call}
+    contexts:
+      song:
+        vocal_p: 1.0                     # encounter built around a singer (males only)
+        callers: {choice: [1, 2, 3], weights: [0.7, 0.2, 0.1], src: "BMX02 (assumed weights)"}
+        sequence:
+          type: song
+          phrase: [A_unit, B_unit]       # A followed by 1-3 B units (ABBB...)
+          b_per_a: {choice: [1, 2, 3]}
+          c_unit_p: 0.05                 # rare C unit (n=4) (assumed)
+          a_to_b: {mean: 47.8, sd: 3.7, src: "BM001; tags 49+-10 (BM011)"}
+          b_to_b: {mean: 30.6, sd: 0.7, src: BM009}
+          b_to_a: {mean: 83.0, sd: 25.1, src: BM001}
+          units_per_dive: {uniform: [3, 10], src: BMX03}
+        timeline:
+          calling_period_min: {mean: 12, sd: 3, src: "BMX04 (NZ dives 727 s; NEP 14-17 min)"}
+          surfacing_gap: {lognormal_median: 200, range: [100, 480], src: BMX04}
+          bout_h: {lognormal_median: 3, range: [0.5, 12], src: BMX05}
+          silent_spell_min: {lognormal_median: 20, range: [5, 90], src: "assumed"}
+        range_km: {loguniform: [1, 200], src: BMX10}
+        chorus_p: {Aug-Nov: 0.3, other: 0.1, src: "BMX11 (assumed)"}
+        encounter_len_min: {loguniform: [30, 180]}
+      feeding_D:
+        group_size: {uniform_int: [1, 4]}
+        vocal_p: 0.33
+        sequence: {type: irregular, call_types: [D_call], rate_per_h: {mean: 4.0, sd: 3.7, min: 0.5, src: BMX07}, per_dive_max: 15, cluster_within_dive: true}
+        timeline:
+          calling_period_min: {mean: 10, sd: 3, src: "assumed (feeding dives)"}
+          surfacing_gap: {lognormal_median: 200, range: [100, 480]}
+          silent_spell_min: {lognormal_median: 20, range: [5, 90], src: assumed}
+        range_km: {loguniform: [0.5, 100]}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [20, 120]}
+      song_and_D:
+        note: "whales switch between song and D calls within the encounter (BMX08)"
+        mix_of: [song, feeding_D]
+        switches: {uniform_int: [1, 4]}
+        encounter_len_min: {loguniform: [60, 240]}
+      singular_AB:
+        group_size: {uniform_int: [2, 3]}
+        callers: 1
+        sequence:
+          type: singular
+          call_unit: {choice: [A_unit, B_unit, AB_pair]}
+          a_to_b: {mean: 47.1, sd: 1.7, src: BM003}
+          rate_per_h: {mean: 3.9, sd: 3.3, min: 0.5, src: BMX06}
+          one_per_dive: true
+        timeline:
+          calling_period_min: {mean: 10, sd: 3}
+          surfacing_gap: {lognormal_median: 200, range: [100, 480]}
+        range_km: {loguniform: [0.5, 100]}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [30, 180]}
+
+  nw_pacific:
+    region: "NW / central N Pacific (Aleutians, NW Pacific, Kaneohe, Wake, Midway)"
+    call_types:
+      type_I:
+        model: multipart
+        segments:
+          - {kind: tone,  f: {mean: 20.2, sd: 0.2}, duration: {mean: 6.2, sd: 0.8}}
+          - {kind: sweep, f_end: {mean: 18.4, sd: 0.4}, duration: {mean: 2.5, sd: 0.9}}
+          - {kind: tone,  f: {mean: 18.7, sd: 0.6}, duration: {mean: 4.6, sd: 0.9}}
+        optional_tail: {p: 0.5, choice: [up_down_18.2_19.3_18.4_10s, jump_19.1_down_18.6_6.9s]}
+        src: BM015
+      type_II:
+        model: multipart
+        segments:
+          - {kind: tone,  f: {mean: 20.2, sd: 0.2}, duration: {mean: 6.6, sd: 0.8}}
+          - {kind: sweep, f_end: {mean: 18.8, sd: 0.8}, duration: {mean: 2.3, sd: 1.1}}
+          - {kind: sweep, f_end: {mean: 18.5, sd: 0.6}, duration: {mean: 8.0, sd: 2.2}}
+        src: BM016
+      type_III:
+        model: multipart
+        segments:
+          - {kind: tone,  f: {mean: 20.2, sd: 0.2}, duration: {mean: 6.9, sd: 2.0}}
+          - {kind: sweep, f_end: {mean: 18.1, sd: 0.4}, duration: {mean: 4.1, sd: 1.2}}
+        followed_by: {call: type_IV, gap: {mean: 5.7, sd: 2.3}}
+        src: BM017
+      type_IV:
+        model: sweep
+        f_start: {mean: 55.8, sd: 3.6}
+        f_end: {mean: 32.1, sd: 1.5}
+        duration: {mean: 7.8, sd: 1.2}
+        src: BM018
+      midway_variant:
+        model: sweep
+        f_start: {mean: 25, range: [24, 26]}
+        f_end: {mean: 23, range: [22, 24]}
+        duration: {mean: 25, range: [20, 30]}
+        src: BM019
+    contexts:
+      song:
+        callers: {choice: [1, 2, 3], weights: [0.7, 0.2, 0.1]}
+        sequence:
+          type: song
+          call_choice: {choice: [type_I, type_II, type_III, midway_variant]}   # one song type per caller
+          repeat_interval: {mean: 56.9, sd: 8.0, src: BM015}
+        timeline:
+          calling_period_min: {mean: 12, sd: 3}
+          surfacing_gap: {lognormal_median: 200, range: [100, 480]}
+          bout_h: {lognormal_median: 3, range: [0.5, 12]}
+          silent_spell_min: {lognormal_median: 20, range: [5, 90]}
+        range_km: {loguniform: [1, 200]}
+        chorus_p: 0.1
+        encounter_len_min: {loguniform: [30, 180]}
+
+  se_pacific:
+    region: "SE Pacific (Chile, Peru, eastern tropical Pacific)"
+    variants: {choice: [SEP1, SEP2], src: "BM020, BM021, BM034, BM035"}
+    call_types:
+      pre_A2:  {model: tone, f: {mean: 414, sd: 15.5}, duration: {mean: 0.7, cv: 0.2}, src: BM035}
+      A2:      {model: tone, f: {mean: 55, sd: 3.0, note: "SD reduced from 12.1 (harmonic picks)"}, duration: {mean: 9.5, cv: 0.1}, src: BM035}
+      B2:      {model: pulsed_band, carrier: {mean: 84, sd: 7.6}, pulse_rate: {mean: 6.62, sd: 0.11}, n_sidebands: 2, duration: {mean: 12.6, cv: 0.1}, src: BM035}
+      C2:      {model: harmonic, f0: {mean: 25.0, sd: 0.25}, harmonics: [1, 2, 3], levels_db: {1: 0, 2: {uniform: [-10, 0]}, 3: {uniform: [-12, -3]}}, duration: {mean: 4.5, cv: 0.1}, src: "BM020 (peak 25.8->23.5 Hz), BM035"}
+      pre_D2:  {model: tone, f: {mean: 356, sd: 9.7}, duration: {mean: 1.0, cv: 0.2}, src: BM035}
+      D2:      {model: harmonic, f0: {mean: 25.0, sd: 0.25}, harmonics: [1, 2, 3], levels_db: {1: 0, 2: {uniform: [-10, 0]}, 3: {uniform: [-12, -3]}}, duration: {mean: 8.0, cv: 0.1}, src: "BM020, BM035"}
+      E2:      {model: tone, f: {mean: 85.3, sd: 2.2}, duration: {mean: 12.6, cv: 0.1}, src: BM035}
+      A1:      {model: tone, f: {mean: 21, sd: 0.8}, duration: {mean: 11.4, cv: 0.1}, src: BM034}
+      B1:      {model: pulsed_band, carrier: {mean: 49, sd: 3.0, note: "SD reduced from 17.1"}, pulse_rate: {mean: 6.0, range: [5.5, 6.5]}, n_sidebands: 2, duration: {mean: 9.2, cv: 0.1}, src: "BM034, BM021"}
+      pre_C1:  {model: tone, f: {mean: 350, sd: 3.3}, duration: {mean: 0.7, cv: 0.2}, src: BM034}
+      C1:      {model: tone, f: {mean: 25, sd: 0.5}, duration: {mean: 9.5, cv: 0.1}, src: BM034}
+      D_call: {ref: shared_call_types.D_call}
+    contexts:
+      song:
+        callers: {choice: [1, 2, 3], weights: [0.7, 0.2, 0.1]}
+        sequence:
+          type: song
+          SEP2_phrase: [pre_A2, A2, {gap: 19.5}, B2, C2, pre_D2, D2]
+          SEP2_E2_p: 0.06               # E2 in 4 of 62 phrases
+          SEP2_phrase_len: {mean: 59.6, sd: 6.7}
+          SEP2_song_interval: {mean: 120, range: [100, 140], src: BM020}
+          SEP1_phrase: [A1, B1, pre_C1, C1]
+          SEP1_pre_C1_p: 0.8
+          SEP1_phrase_len: {mean: 36.5, cv: 0.1}
+          SEP1_song_interval: {mean: 104, range: [95, 115], src: "BM021, BM034"}
+        timeline:
+          calling_period_min: {mean: 12, sd: 3}
+          surfacing_gap: {lognormal_median: 200, range: [100, 480]}
+          bout_h: {lognormal_median: 3, range: [0.5, 12]}
+          silent_spell_min: {lognormal_median: 20, range: [5, 90]}
+        range_km: {loguniform: [0.5, 200]}
+        chorus_p: 0.1
+        encounter_len_min: {loguniform: [30, 180]}
+      feeding_D: {ref: populations.ne_pacific.contexts.feeding_D}
+      song_and_D: {mix_of: [song, feeding_D], switches: {uniform_int: [1, 4]}, encounter_len_min: {loguniform: [60, 240]}}
+
+  new_zealand:
+    region: "SW Pacific, New Zealand"
+    call_types:
+      A_unit: {model: sweep, f_start: {mean: 26.4, sd: 3.5}, f_end: {mean: 20.7, sd: 2.8}, duration: {mean: 11.7, sd: 1.4}, pulse_rate: 2.66, src: BM022}
+      B_unit: {model: tone, f: {mean: 23.9, sd: 0.3, note: "reported SD 0.09 (one season)"}, duration: {mean: 20.3, sd: 0.7}, src: BM023}
+      C_unit: {model: tone, f: {mean: 24.6, sd: 0.3}, duration: {mean: 6.1, sd: 0.5}, src: BM024}
+      D_unit: {model: harmonic, f0: {mean: 17.6, sd: 0.3}, harmonics: [1, 2, 3], levels_db: {1: 0, 2: {uniform: [-10, 0]}, 3: {uniform: [-15, -5]}}, duration: {mean: 14.6, sd: 3.4}, src: "BM025, BM026"}
+      D_call: {ref: shared_call_types.D_call, note: "NZ non-song downswept calls (no stats; NE Pacific D values)"}
+    contexts:
+      song:
+        callers: {choice: [1, 2, 3], weights: [0.7, 0.2, 0.1]}
+        sequence:
+          type: song
+          phrase: [A_unit, {gap: {mean: 7.5, sd: 1.2}}, B_unit, {gap: {mean: 7.4, sd: 0.6}}, C_unit, {gap: {uniform: [3, 8], note: assumed}}, D_unit]
+          song_interval: {mean: 124, range: [113, 135], src: "BM025 medians 115 (1997) and 133 (2013); within-whale SD 0.9 s (BM026)"}
+        timeline:
+          calling_period_min: {mean: 12, sd: 3}
+          surfacing_gap: {lognormal_median: 220, range: [109, 477], src: BM026}
+          bout_h: {lognormal_median: 3, range: [0.5, 12]}
+          silent_spell_min: {lognormal_median: 20, range: [5, 90]}
+        range_km: {loguniform: [1, 150]}
+        chorus_p: 0.1
+        encounter_len_min: {loguniform: [30, 180]}
+      feeding_D: {ref: populations.ne_pacific.contexts.feeding_D}
+      song_and_D: {mix_of: [song, feeding_D], switches: {uniform_int: [1, 4]}, encounter_len_min: {loguniform: [60, 240]}}
+
+  antarctic:
+    region: "Southern Ocean (circumpolar; also winters in SE Pacific / NZ)"
+    call_types:
+      Z_call:
+        model: multipart
+        segments:
+          - {kind: tone,  f: {mean: 27.7, sd: 0.4}, duration: {mean: 9.5, sd: 1.4}, level_db: 0}
+          - {kind: sweep, f_end: {mean: 19.5, sd: 0.4}, duration: {mean: 1.1, sd: 0.5}, level_db: -6}
+          - {kind: sweep, f_end: {mean: 18.9, sd: 0.5}, start_offset_hz: 0.6, duration: {mean: 8.0, sd: 3.0}, level_db: -6}
+        variants: {choice: [full, A_only, A_plus_B], note: "variant mix not reported -> equal"}
+        src: "BM028, BM029, BM031 (unit B/C quieter: assumed -6 dB)"
+      D_call: {ref: shared_call_types.D_call_antarctic}
+    contexts:
+      song:
+        callers: {choice: [1, 2, 3], weights: [0.7, 0.2, 0.1]}
+        sequence: {type: song, call: Z_call, repeat_interval: {mean: 62.3, sd: 5.2, src: BM028}}
+        timeline:
+          calling_period_min: {mean: 12, sd: 3}
+          surfacing_gap: {lognormal_median: 172, range: [100, 260], src: "BM028 (172+-48 s)"}
+          bout_h: {lognormal_median: 3, range: [0.5, 12]}
+          silent_spell_min: {lognormal_median: 20, range: [5, 90]}
+        range_km: {loguniform: [1, 250]}
+        chorus_p: {Feb-Jul: 0.6, other: 0.3, src: BMX11}
+        encounter_len_min: {loguniform: [30, 180]}
+      feeding_D:
+        ref: populations.ne_pacific.contexts.feeding_D
+        call_types: [D_call]
+      song_and_D: {mix_of: [song, feeding_D], switches: {uniform_int: [1, 4]}, encounter_len_min: {loguniform: [60, 240]}}

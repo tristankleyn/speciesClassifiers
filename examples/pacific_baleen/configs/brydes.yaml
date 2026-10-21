@@ -1,0 +1,92 @@
+# Bryde's whale — Pacific only (ETP, S California/Baja, Gulf of California, Hawaii, Japan, New Zealand) (v1).
+# McDonald's 22 Hz NZ tone (uncertain species) excluded.
+class: Brydes
+sd_inflation: 1.5
+individual_sd_ratio: 0.3                 # BWX07 (assumed; calls very stereotyped)
+year_range: [2000, 2022]
+sampling_order: [context, population]    # BWX01: equal encounters per phrase-type context
+drift:
+  kauai.be3_ici: {rate_s_per_yr: 13.1, ref_year: 2010, note: tentative, src: BW019}
+
+# Oleson 2003 values are mean [range]; Heimlich 2005 mean+-SD (range). Multi-tone phrases: each component present with its reported probability.
+# Default harmonics none; repetition = component repeated 3.3-4.3 s later at -3 to -10 dB (BWX04).
+call_types:
+  swept_alternating:   {model: multitone, components: [{f: {mean: 36.7, sd: 0.6, range: [33.5, 39.0]}, duration: {mean: 1.1, sd: 0.5}, p: 1.0}, {f_start: {mean: 24.9, sd: 1.1}, f_end: {mean: 18.5, sd: 1.1}, duration: {mean: 1.8, sd: 0.6}, p: 0.68, lag_s: {uniform: [0.3, 1.5]}}], phrase_s: {mean: 2.0, sd: 1.1, range: [0.3, 5.4]}, repeat_p: 0.47, src: "BW009, BW001 (Be1)"}
+  nonswept_alternating: {model: multitone, components: [{f: {mean: 28.6, sd: 0.8, range: [24.6, 32.3]}, duration: 1.1, p: 1.0}, {f: {mean: 15.7, sd: 1.5, range: [13.5, 20.7]}, duration: 1.4, p: 0.48, lag_s: 0.7}, {f: {mean: 46.7, sd: 3.3, range: [37.1, 53.9]}, duration: 1.4, p: 0.41}], phrase_s: {mean: 2.0, sd: 0.9}, repeat_p: 0.76, src: BW010}
+  high_burst_tonal:    {model: multitone, components: [{f: {mean: 41.7, sd: 1.0, range: [39.9, 46.6]}, duration: 1.0, p: 1.0, harmonics_to_hz: {uniform: [80, 160]}}, {f: {mean: 31.0, sd: 1.2}, duration: 0.9, p: 0.58}, {f: {mean: 49.4, sd: 1.1}, duration: 0.5, p: 0.38}], phrase_s: {mean: 1.0, sd: 0.5}, repeat_p: 0.3, src: "BW011, BW002 (Be2: 2-4 harmonics to 160 Hz)"}
+  low_burst_tonal:     {model: multitone, components: [{f: {mean: 18.5, sd: 0.8, range: [16.8, 26.7]}, duration: 1.4, p: 1.0}, {f: {mean: 29.8, sd: 2.5}, duration: 1.0, p: 1.0}, {f: {mean: 67.2, sd: 1.6}, duration: 1.4, p: 0.78}], phrase_s: {mean: 2.1, sd: 0.8}, repeat_p: 0.3, src: BW012}
+  harmonic_tone:       {model: harmonic, f0: {mean: 25.4, sd: 0.6, range: [20.7, 26.9]}, harmonic_p: {2: 0.24, 3: 0.47}, duration: {mean: 2.1, sd: 0.8, range: [0.5, 7.0]}, src: "BW013, BW003 (Be3)"}
+  be4_etp:             {model: tone, f: {mean: 60, range: [59.5, 60.2]}, duration: {mean: 1.4, range: [0.8, 3.0]}, src: BW004}
+  be4_socal:           {model: multipart, parts: [{f_start: {mean: 55, cv: 0.02}, f_end: 57.5, duration: 1.0}, {f_start: 57.5, f_end: 57.6, duration: 1.0}, {f: 57.6, duration: 1.0}], duration_scale: {uniform: [0.7, 1.2]}, harmonics: [1, 2], src: BW014}
+  be4_goc:             {model: sweep, f_start: {mean: 51, sd: 1}, f_end: {mean: 59, sd: 1, note: "max 60, peak 57"}, duration: {mean: 1.9, sd: 0.2}, harmonics: {n: {uniform_int: [4, 7]}}, src: BW015}
+  be5:                 {model: sweep, f_start: {mean: 26.0, range: [25.5, 26.4]}, f_end: {mean: 26.6, range: [26.2, 27.0]}, harmonics: {n: {uniform_int: [4, 8]}}, duration: {mean: 1.76, range: [1.3, 2.2]}, src: BW005}
+  be6_downsweep:       {model: sweep, f_start: {mean: 208, cv: 0.1}, f_end: {mean: 76, cv: 0.1}, duration: {mean: 2.83, range: [0.7, 4.9]}, burst: {sweeps: {uniform_int: [1, 4]}, gap_s: 0.5}, src: BW006}
+  be8a_pulsed_moan:    {model: pulsed_band, carrier: {mean: 44.6, range: [43.0, 48.0]}, sideband_spacing: 51.6, n_sidebands: {uniform_int: [5, 9], note: "harmonics"}, duration: {mean: 0.35, range: [0.25, 0.61]}, src: BW007}
+  be8b_downsweep:      {model: sweep, f_start: {mean: 50, cv: 0.05, note: "~46 Hz reported; slope assumed"}, f_end: {mean: 42, cv: 0.05}, duration: {mean: 0.37, range: [0.30, 0.41]}, src: BW008}
+  be10:                {model: modulated, f_start: {mean: 120, sd: 15}, f_peak: {mean: 89, sd: 10, note: "minimum (down then up)"}, f_end: {mean: 134, sd: 18}, duration: {mean: 0.2, sd: 0.1}, harmonics: [1, 2], src: BW016}
+  be11:                {model: sweep, f_start: {mean: 239, sd: 8}, f_end: {mean: 114, sd: 3}, duration: {mean: 0.1, sd: 0.03}, src: BW017}
+  be12:                {model: sweep, f_start: {mean: 145, cv: 0.1}, f_end: {mean: 93, cv: 0.1}, duration: {mean: 1.29, cv: 0.2}, src: BW018}
+  be3_kauai:           {model: sweep, f_start: {uniform: [28, 33]}, f_end: {uniform: [25.6, 28]}, duration: {mean: 1.7, cv: 0.2}, note: "impulsive onset not emitted", harmonics: {n: {uniform_int: [1, 3]}}, src: BW019}
+  be3_nz:              {model: sweep, f_start: {mean: 25, cv: 0.05}, f_end: {mean: 22, cv: 0.05}, duration: {mean: 1.7, cv: 0.2, note: "duration not reported (Be3 assumed)"}, src: BW020}
+
+populations:
+  etp:
+    region: "Eastern tropical Pacific"
+    contexts:
+      swept_alternating:    {template: phrase_series, call_types: [swept_alternating], group_size: {uniform_int: [2, 4]}, callers: {uniform_int: [1, 2]}, inter_phrase: {mean_min: 2.9, sd_min: 1.0, range_min: [1.0, 21.8]}, src: "BW009, BWX05"}
+      nonswept_alternating: {template: phrase_series, call_types: [nonswept_alternating], inter_phrase: {mean_min: 3.0, sd_min: 1.9, range_min: [1.2, 12.6]}, src: BW010}
+      high_burst_tonal:     {template: phrase_series, call_types: [high_burst_tonal], group_size: 1, callers: 1, inter_phrase: {mean_s: 3.9, sd_s: 2.8, range_s: [1.4, 16.1]}, oleson_ici_min: {mean: 2.93, range: [0.35, 7.2], note: "between bursts (Be2)"}, src: "BW011, BW002"}
+      low_burst_tonal:      {template: phrase_series, call_types: [low_burst_tonal], inter_phrase: {mean_s: 5.8, sd_s: 4.2, range_s: [1.7, 33.8]}, src: BW012}
+      harmonic_tone:        {template: phrase_series, call_types: [harmonic_tone], inter_phrase: {mean_s: 6.3, sd_s: 6.1, range_s: [2.0, 44.3]}, oleson_ici_min: {mean: 2.28, range: [0.45, 8.65]}, src: "BW013, BW003"}
+      be4:                  {template: phrase_series, call_types: [be4_etp], group_size: {uniform_int: [2, 4]}, inter_phrase: {mean_min: 3.35, range_min: [1.03, 7.08]}, src: BW004}
+      be5:                  {template: phrase_series, call_types: [be5], group_size: 1, callers: 1, inter_phrase: {mean_min: 5.5, range_min: [1.5, 15.88]}, src: "BW005, BWX05"}
+      be6_downsweep:        {template: phrase_series, call_types: [be6_downsweep], inter_phrase: {mean_min: 0.30, range_min: [0.11, 0.51]}, src: BW006}
+  socal_baja:
+    region: "S California Bight / Baja (seasonal Aug-Dec)"
+    contexts:
+      be4: {template: phrase_series, call_types: [be4_socal], group_size: {uniform_int: [1, 3]}, inter_phrase: {mean_min: 3.35, range_min: [1.03, 7.08], note: "ETP Be4 ICI borrowed (assumed)"}, src: BW014}
+  gulf_of_california:
+    region: "Gulf of California (Bahia de La Paz)"
+    contexts:
+      be4: {template: phrase_series, call_types: [be4_goc], group_size: {uniform_int: [2, 5]}, callers: 1, calling_fraction: 0.3, inter_phrase: {mean_min: 3.35, range_min: [1.03, 7.08], note: "assumed"}, src: "BW015, BWX06"}
+      gulf_lone_sweeps:
+        template: phrase_series
+        group_size: 1
+        callers: 1
+        call_mix: {weights: {be10: 7, be11: 2, be12: 1}, src: "BW016-BW018"}
+        calling_fraction: 0.3
+        inter_phrase: {lognormal_median_min: 2, range_min: [0.2, 15], note: assumed}
+        src: BWX06
+  kauai:
+    region: "Central N Pacific (Kauai, PMRF)"
+    contexts:
+      be3_type:
+        template: phrase_series
+        call_types: [be3_kauai]
+        callers: {choice: [1, 2], weights: [0.8, 0.2], src: BWX03}
+        inter_phrase: {lognormal_median_s: 306, range_s: [150, 600], src: "BW019, BWX02"}
+        timeline: {silent_spell_min: {uniform: [10, 40]}, spell_calls: {uniform_int: [10, 100]}, src: BWX02}
+        range_trajectory: {type: drift, speed_ms: {choice: [1.0, 2.1], weights: [0.66, 0.34]}, src: BWX03}
+  japan:
+    region: "NW Pacific (off Japan)"
+    contexts:
+      be8:
+        template: phrase_series
+        call_mix: {weights: {be8a_pulsed_moan: 18, be8b_downsweep: 4}, src: "BW007, BW008"}
+        inter_phrase: {mean_min: 0.05, range_min: [0.03, 0.33], note: "Be8a 0.05, Be8b 0.29 min"}
+  new_zealand:
+    region: "SW Pacific (Hauraki Gulf / Great Barrier Island)"
+    contexts:
+      be3_type: {template: phrase_series, call_types: [be3_nz], inter_phrase: {lognormal_median_min: 3, range_min: [0.5, 15], note: "no regular interval (BW020)"}}
+
+context_templates:
+  phrase_series:
+    group_size: {uniform_int: [1, 3]}
+    callers: 1
+    sequence: {type: phrase_series, series_h: {uniform: [0.5, 6], src: BWX04}}
+    timeline:
+      silent_spell_min: {lognormal_median: 20, range: [5, 120], note: "assumed; Gulf calling 30% of time (BWX06)"}
+    range_km: {loguniform: [1, 100], src: BWX08}
+    detectability_note: "secondary tones and harmonics drop out first"
+    chorus_p: 0                             # BWX09
+    encounter_len_min: {loguniform: [30, 180]}

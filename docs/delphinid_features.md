@@ -18,3 +18,11 @@ PAMGuard behaviour reproduced here:
 - Whistle contour points after the frame end are kept (PAMGuard compares point times in seconds against the frame length in milliseconds).
 
 The original published models were trained on features made with PAMpal, which differ in two of these cases: long clicks were clipped around their peak, and whistles starting before a frame were left out. In PAMGuard's test data this affects 4 of 52 click frames and 13 of 45 whistle frames.
+
+## Fractional-octave whistle bins (optional)
+
+`AcousticParams(binning="octave", bands_per_octave=3)` replaces the 100 Hz whistle bins with
+fractional-octave bands, e.g. 27 third-octave bands for `freq_range=(10, 4000)` (centres ~9.8, 12.4 …
+3175, 4000 Hz), for low-frequency (baleen) classifiers. The exported `delphinID.pdtf` then carries
+`"binning": "octave"` and `"bandsperoctave"`; PAMGuard needs `tools/pamguard/delphinid_octave_bins.patch`
+to read it.

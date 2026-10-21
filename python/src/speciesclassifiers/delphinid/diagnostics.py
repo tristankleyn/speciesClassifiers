@@ -32,7 +32,11 @@ def bin_centres(acoustic: AcousticParams, sample_rate=None, n=None):
     """Centre frequency (Hz) of each model input."""
     fmin, fmax = acoustic.freq_range
     d = max(int(acoustic.downsample or 1), 1)
-    if acoustic.voc_type == "whistle":
+    if acoustic.voc_type == "whistle" and getattr(acoustic, "binning", "linear") == "octave":
+        e = acoustic.bin_edges()
+        n_raw = len(e) - 1
+        c = np.array([np.sqrt(e[k * d] * e[min((k + 1) * d, n_raw)]) for k in range(int(np.ceil(n_raw / d)))])
+    elif acoustic.voc_type == "whistle":
         n_raw = int((fmax - fmin) / WHISTLE_BIN_HZ)
         c = np.array([fmin + WHISTLE_BIN_HZ * (k * d + min(d, n_raw - k * d) / 2) for k in range(int(np.ceil(n_raw / d)))])
     else:

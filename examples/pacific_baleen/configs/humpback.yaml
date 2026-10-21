@@ -1,0 +1,156 @@
+# Humpback whale — Pacific + Southern Ocean (v1). Non-tonal sounds (underwater blows) excluded.
+class: Humpback
+sd_inflation: 1.5
+individual_sd_ratio: 0.3                 # HBX11 (assumed)
+year_range: [2000, 2022]
+sampling_order: [context, population]    # equal encounters per context; population drawn among those offering it
+drift: {}                                # song changes yearly instead: see song_year below (HBX09)
+
+# Call-type notation: f_start / f_end / f_peak (Hz), duration (s). "modulated" contour passes through f_peak.
+# Harmonics default: up to 4 kHz with -4 to -12 dB/harmonic (assumed), lost first at range (HBX10).
+# Pulsed types (purr, growl, trill) use pulse_rate -> sidebands spaced at that rate when > ~10 Hz.
+
+call_types:
+  # --- E Australia (Dunlop 2007; HB022-HB055). song_unit = also used as a song unit (Dunlop "also a song unit")
+  wop:              {model: modulated, f_start: {mean: 52, sd: 34}, f_end: {mean: 73, sd: 16}, f_peak: {mean: 80, sd: 19}, duration: {mean: 0.748, sd: 0.196}, src: HB022}
+  thwop:            {model: modulated, f_start: {mean: 43.6, sd: 18}, f_end: {mean: 83.0, sd: 20}, f_peak: {mean: 94.6, sd: 27}, duration: {mean: 0.949, sd: 0.244}, src: HB023}
+  snort:            {model: modulated, f_start: {mean: 53, sd: 26}, f_end: {mean: 52, sd: 25}, f_peak: {mean: 84, sd: 41}, duration: {mean: 0.284, sd: 0.107}, src: HB024}
+  grumble:          {model: modulated, f_start: {mean: 44.2, sd: 14}, f_end: {mean: 46.7, sd: 15}, f_peak: {mean: 62, sd: 24}, duration: {mean: 1.509, sd: 1.362, range: [0.3, 6]}, src: HB025}
+  sigh:             {model: modulated, f_start: {mean: 183, sd: 100, range: [30, 330], note: "SD 226 capped"}, f_end: {mean: 174, sd: 100, range: [30, 330]}, f_peak: {mean: 86, sd: 7}, duration: {mean: 2.533, sd: 0.901}, song_unit: true, src: HB026}
+  siren:            {model: modulated, f_start: {mean: 162, sd: 79}, f_end: {mean: 272, sd: 78}, f_peak: {mean: 168, sd: 18}, duration: {mean: 2.309, sd: 0.584}, song_unit: true, src: HB027}
+  short_moan:       {model: modulated, f_start: {mean: 168, sd: 37}, f_end: {mean: 199, sd: 64}, f_peak: {mean: 178, sd: 55}, duration: {mean: 0.353, sd: 0.06}, song_unit: true, src: HB028}
+  horn:             {model: modulated, f_start: {mean: 180, sd: 51}, f_end: {mean: 401, sd: 133}, f_peak: {mean: 302, sd: 32}, duration: {mean: 0.365, sd: 0.126}, song_unit: true, src: HB029}
+  violin:           {model: modulated, f_start: {mean: 884, sd: 246}, f_end: {mean: 616, sd: 256}, f_peak: {mean: 700, sd: 152}, duration: {mean: 0.312, sd: 0.057}, song_unit: true, src: HB030}
+  groan:            {model: modulated, f_start: {mean: 156.7, sd: 54}, f_end: {mean: 160.0, sd: 41}, f_peak: {mean: 156.4, sd: 41}, duration: {mean: 1.262, sd: 0.63}, song_unit: true, src: HB031}
+  ascending_moan:   {model: modulated, f_start: {mean: 162, sd: 24}, f_end: {mean: 233, sd: 36}, f_peak: {mean: 229, sd: 38}, duration: {mean: 1.854, sd: 0.51}, song_unit: true, src: HB032}
+  modulated_moan:   {model: modulated, f_start: {mean: 206, sd: 31}, f_end: {mean: 610, sd: 188}, f_peak: {mean: 364, sd: 50}, fm: {rate_hz: {uniform: [1, 4]}, depth_hz: {uniform: [20, 100]}, note: assumed}, duration: {mean: 1.212, sd: 0.418}, song_unit: true, src: HB033}
+  cry:              {model: modulated, f_start: {mean: 352, sd: 163}, f_end: {mean: 627, sd: 226}, f_peak: {mean: 516, sd: 89}, duration: {mean: 1.623, sd: 0.194}, src: HB034}
+  modulated_cry:    {model: modulated, f_start: {mean: 534, sd: 179}, f_end: {mean: 1415, sd: 32}, f_peak: {mean: 588, sd: 458}, fm: {rate_hz: {uniform: [1, 4]}, depth_hz: {uniform: [50, 200]}, note: assumed}, duration: {mean: 2.204, sd: 0.517}, src: HB035}
+  ascending_cry:    {model: modulated, f_start: {mean: 259, sd: 41}, f_end: {mean: 406, sd: 79}, f_peak: {mean: 354, sd: 29}, duration: {mean: 1.773, sd: 0.119}, src: HB036}
+  trumpet:          {model: modulated, f_start: {mean: 234, sd: 77}, f_end: {mean: 836, sd: 135}, f_peak: {mean: 471, sd: 140}, duration: {mean: 0.732, sd: 0.345}, song_unit: true, src: HB037}
+  ascending_shriek: {model: modulated, f_start: {mean: 714, sd: 70, note: "SD 0 (n=2); 10% CV used"}, f_end: {mean: 2268, sd: 230}, f_peak: {mean: 953, sd: 95}, duration: {mean: 1.252, sd: 0.125}, song_unit: true, src: "HB038; SE Alaska HB014 similar"}
+  descending_shriek: {model: modulated, f_start: {mean: 889, sd: 107}, f_end: {mean: 932, sd: 90}, f_peak: {mean: 1083, sd: 239}, duration: {mean: 2.297, sd: 1.192}, song_unit: true, src: HB039}
+  squeak:           {model: modulated, f_start: {mean: 1649, sd: 506}, f_end: {mean: 2227, sd: 897, range: [500, 4000]}, f_peak: {mean: 1478, sd: 265}, duration: {mean: 0.213, sd: 0.132}, song_unit: true, src: HB040}
+  purr:             {model: pulsed_band, carrier: {mean: 57, sd: 43, range: [20, 200]}, pulse_rate: {mean: 21.6, sd: 6.1}, n_sidebands: {uniform_int: [2, 8]}, f_peak: {mean: 206, sd: 62}, duration: {mean: 1.566, sd: 0.575}, song_unit: true, src: HB041}
+  growl_ea:         {model: pulsed_band, carrier: {mean: 66, sd: 18}, pulse_rate: {mean: 67.3, sd: 3.9}, n_sidebands: {uniform_int: [1, 4]}, duration: {mean: 2.253, sd: 1.268}, song_unit: true, src: HB042}
+  trill:            {model: pulsed_band, carrier: {mean: 300, sd: 80, note: "start 261 -> end 342"}, sweep_hz: {mean: 80, range: [0, 200]}, pulse_rate: {mean: 40.5, sd: 3.4}, n_sidebands: {uniform_int: [1, 3]}, duration: {mean: 2.194, sd: 0.468}, song_unit: true, src: HB043}
+  bark:             {model: modulated, f_start: {mean: 153.4, sd: 104}, f_end: {mean: 350.4, sd: 201}, f_peak: {mean: 225.7, sd: 106}, duration: {mean: 0.205, sd: 0.119}, song_unit: true, src: HB045}
+  bellow:           {model: modulated, f_start: {mean: 379, sd: 114}, f_end: {mean: 404, sd: 100}, f_peak: {mean: 437, sd: 97}, duration: {mean: 0.939, sd: 0.415}, src: HB046}
+  creak:            {model: pulse_series, f_start: {mean: 29, sd: 7}, f_end: {mean: 102, sd: 26}, f_peak: {mean: 243, sd: 15}, duration: {mean: 1.723, sd: 0.614}, note: "tonal fragments only (assumed)", song_unit: true, src: HB047}
+  screech:          {model: modulated, f_start: {mean: 125, sd: 51}, f_end: {mean: 216, sd: 45}, f_peak: {mean: 365, sd: 38}, duration: {mean: 1.366, sd: 0.336}, song_unit: true, src: HB048}
+  scream:           {model: modulated, f_start: {mean: 684, sd: 149}, f_end: {mean: 1157, sd: 248}, f_peak: {mean: 1177, sd: 166}, duration: {mean: 1.179, sd: 0.288}, src: HB049}
+  grunt:            {model: modulated, f_start: {mean: 43, sd: 20}, f_end: {mean: 43, sd: 20}, f_peak: {mean: 74.8, sd: 39}, duration: {mean: 0.221, sd: 0.11}, bout_units: {uniform_int: [3, 7], src: "HB050 (5)"}, song_unit: true, src: HB050}
+  croak:            {model: modulated, f_start: {mean: 75, sd: 45}, f_end: {mean: 120, sd: 61}, f_peak: {mean: 193, sd: 62}, duration: {mean: 0.522, sd: 0.255}, bout_units: {uniform_int: [3, 8]}, song_unit: true, src: HB051}
+  yap:              {model: sweep, f_start: {mean: 2480, sd: 875, range: [800, 4000]}, f_end: {mean: 250, sd: 94}, duration: {mean: 0.372, sd: 0.101}, bout_units: {uniform_int: [6, 8]}, song_unit: true, src: HB052}
+  yelp:             {model: modulated, f_start: {mean: 236, sd: 118}, f_end: {mean: 173, sd: 111}, f_peak: {mean: 170, sd: 46}, duration: {mean: 0.251, sd: 0.074}, bout_units: {uniform_int: [3, 4]}, src: HB053}
+  pulses:           {model: modulated, f_start: {mean: 191, sd: 102}, f_end: {mean: 188, sd: 39}, f_peak: {mean: 171, sd: 63}, duration: {mean: 0.062, sd: 0.027}, bout_units: {uniform_int: [7, 15]}, note: "mostly below min_frag; kept for realism", src: HB054}
+  low_yap:          {model: sweep, f_start: {mean: 712, sd: 85}, f_end: {mean: 268, sd: 150, note: "SD 383 capped"}, duration: {mean: 0.129, sd: 0.037}, bout_units: 6, src: HB055}
+  # blow (HB044) excluded: not tonal
+
+  # --- SE Alaska feeding ground (Fournet 2015 HB001-HB016; durations cross-checked with Fournet 2018 HB017-HB020).
+  # Only start F0 and peak reported: f_end drawn around f_start (+-30%, assumed).
+  growl_ak:         {model: pulsed_band, carrier: {mean: 90, sd: 39}, f_peak: {mean: 128, sd: 75}, end_ratio: {uniform: [0.7, 1.3]}, pulse_rate: {uniform: [20, 60], note: "trilled (assumed)"}, n_sidebands: {uniform_int: [1, 4]}, duration: {mean: 1.0, sd: 0.7}, src: "HB001, HB017"}
+  whup:             {model: modulated, f_start: {mean: 112, sd: 80, note: "SD 158 capped"}, f_end: {ratio_to_start: {uniform: [1.2, 2.0]}, note: "upswept end (assumed)"}, f_peak: {mean: 132, sd: 81}, duration: {mean: 0.7, sd: 0.2}, src: "HB002, HB018"}
+  modulated_moan_ak: {model: modulated, f_start: {mean: 170, sd: 33}, f_peak: {mean: 223, sd: 102}, end_ratio: {uniform: [0.7, 1.3]}, fm: {rate_hz: {uniform: [1, 4]}, depth_hz: {uniform: [20, 100]}}, duration: {mean: 1.3, sd: 0.6}, src: HB003}
+  descending_moan:  {model: sweep, f_start: {mean: 225, sd: 91}, f_end: {mean: 147, sd: 28, note: "peak used as end (assumed)"}, duration: {mean: 1.4, sd: 0.6}, src: HB004}
+  groan_ak:         {model: modulated, f_start: {mean: 207, cv: 0.3}, f_peak: {mean: 209, cv: 0.3}, end_ratio: {uniform: [0.8, 1.2]}, duration: {mean: 3.3, cv: 0.3}, src: HB005}
+  variable_moan:    {model: modulated, f_start: {mean: 341, cv: 0.3}, f_peak: {mean: 180, cv: 0.3}, end_ratio: {uniform: [0.5, 1.5]}, duration: {mean: 2.5, cv: 0.3}, src: HB006}
+  swop:             {model: modulated, f_start: {mean: 244, sd: 150, note: "SD 242 capped"}, f_peak: {mean: 328, sd: 150}, end_ratio: {uniform: [0.6, 1.0]}, duration: {mean: 0.45, sd: 0.25}, src: "HB007, HB020"}
+  teepee:           {model: modulated, f_start: {mean: 142, cv: 0.3}, f_peak: {mean: 191, sd: 101}, end_ratio: {uniform: [0.8, 1.2]}, note: "rise-fall (inverted V)", duration: {mean: 0.6, cv: 0.3}, src: HB008}
+  horse:            {model: pulsed_band, carrier: {mean: 882, sd: 600, range: [100, 4000]}, f_peak: {mean: 1732, sd: 1000, range: [100, 4000]}, pulse_rate: {uniform: [20, 80], note: assumed}, n_sidebands: {uniform_int: [2, 8]}, duration: {mean: 2.1, sd: 0.6}, src: HB009}
+  droplet:          {model: modulated, f_start: {mean: 238, sd: 146}, f_peak: {mean: 309, sd: 140}, end_ratio: {uniform: [1.2, 2.5], note: "rising drip (assumed)"}, duration: {mean: 0.4, sd: 0.15}, src: "HB010, HB019"}
+  squeegie:         {model: modulated, f_start: {mean: 1006, sd: 600, range: [100, 4000]}, f_peak: {mean: 766, sd: 600, range: [100, 4000]}, end_ratio: {uniform: [0.5, 1.5]}, duration: {mean: 2.2, sd: 1.0}, src: HB011}
+  trumpet_ak:       {model: modulated, f_start: {mean: 724, sd: 200}, f_peak: {mean: 859, sd: 491}, end_ratio: {uniform: [0.8, 1.5]}, duration: {mean: 0.9, sd: 0.4}, src: HB012}
+  ahooga:           {model: modulated, f_start: {mean: 269, sd: 68}, f_peak: {mean: 380, sd: 134}, end_ratio: {uniform: [1.0, 1.8]}, duration: {mean: 1.1, sd: 0.5}, src: HB013}
+  ascending_shriek_ak:  {model: modulated, f_start: {mean: 1459, sd: 974, range: [300, 4000]}, f_peak: {mean: 1701, sd: 1279, range: [300, 4000]}, end_ratio: {uniform: [1.2, 2.0]}, duration: {mean: 1.6, sd: 0.7}, src: HB014}
+  descending_shriek_ak: {model: modulated, f_start: {mean: 1302, sd: 1197, range: [300, 4000]}, f_peak: {mean: 1506, sd: 1452, range: [300, 4000]}, end_ratio: {uniform: [0.5, 0.8]}, duration: {mean: 0.9, sd: 0.2}, src: HB015}
+  feeding_call:     {model: multitone, units: {f: {mean: 459, sd: 106}, f_end: {mean: 460, sd: 119}, bandwidth_hz: {mean: 101, sd: 53}, unit_s: {uniform: [0.5, 2]}, gap_s: {uniform: [0.1, 0.5]}}, total_s: {mean: 16.6, sd: 10, range: [2, 60], note: "SD 23.1 capped"}, src: HB016}
+  feeding_cry:      {model: multipart, parts: [{f_start: {mean: 584, range: [349, 1219]}, f_end: {mean: 616}, duration: 0.21}, {f: {mean: 594, range: [322, 999]}, bandwidth_hz: {mean: 32, range: [16, 65]}, duration: {mean: 2.3, range: [0.2, 7.8]}}, {f_start: {mean: 601, range: [344, 1004]}, f_end: {mean: 515, range: [236, 978]}, duration: 0.21}], group_sd_scale: 0.5, note: "cries differ among groups: per-encounter mean, within-group SD halved (assumed)", src: HB021}
+
+song:
+  unit_pool: [sigh, siren, short_moan, horn, violin, groan, ascending_moan, modulated_moan, trumpet, ascending_shriek, descending_shriek, squeak, purr, growl_ea, trill, bark, creak, screech, grunt, croak, yap]   # HB057
+  song_year:                              # HBX09: each encounter draws a 'song year'
+    units_per_song: {uniform_int: [6, 12]}
+    themes: {uniform_int: [3, 7]}
+    phrase_units: {uniform_int: [2, 6]}
+    phrase_repeats: {uniform_int: [2, 8]}
+    unit_gap_s: {uniform: [0.5, 3], note: assumed}
+    year_shift_sd_scale: 0.3              # unit parameters shifted per song year within population SD (assumed)
+  cycle_min: {uniform: [10, 20], src: HBX07}
+  session_h: {lognormal_median: 2, range: [0.2, 13.6], src: "HBX07 (Atlantic, flagged)"}
+  surface_gap_s: {uniform: [30, 60], src: "HBX07 (assumed)"}
+
+populations:
+  e_australia:
+    region: "E Australia migration corridor (Peregian Beach)"
+    contexts:
+      migrating_social:
+        group_size: {choice: [2, 2, 3, 4, 5], weights: [12, 8, 18, 3, 5], note: "MC, pairs, MCE, 3-4 adults, MC+3 escorts", src: HBX02}
+        callers: {uniform_int: [1, 3]}
+        call_mix:                          # HB056 stable-core counts (64%); remaining 36% spread over song-unit + other Dunlop types
+          weights: {cry: 51, ascending_moan: 25, bark: 63, grumble: 160, grunt: 147, modulated_moan: 37, thwop: 87, snort: 110, wop: 172, yap: 105, yelp: 28}
+          other_share: 0.36
+          other_pool: [sigh, siren, short_moan, horn, violin, groan, modulated_cry, ascending_cry, trumpet, ascending_shriek, descending_shriek, squeak, purr, growl_ea, trill, bellow, creak, screech, scream, croak, pulses, low_yap]
+          note: "whoop (38) folded into wop (assumed)"
+        sequence:
+          type: bouts
+          bout_ici_s: {uniform: [0.3, 3.9], src: HBX03}
+          bout_calls: {uniform_int: [2, 10]}
+          calls_per_encounter: {lognormal_median: 30, range: [5, 200], src: HBX04}
+          joining_event_p: 0.3             # adds a burst of grunt/groan/bark (HBX03; p assumed)
+        timeline:
+          silent_spell_min: {lognormal_median: 3, range: [0.5, 30], src: HBX03}
+          long_silence_p: 0.3              # 20-60 min silences in some encounters (assumed)
+        range_km: {loguniform: [0.2, 30], src: HBX10}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [30, 180]}
+      song: {template: song, chorus_p: 0.2, note: "migration: fewer singers (assumed)"}
+
+  north_pacific_breeding:
+    region: "Hawaii / Mexico breeding grounds (song only; social-call stats not available in v1)"
+    contexts:
+      song: {template: song, chorus_p: {Jan-Apr: 0.5, other: 0.2}, src: HBX08}
+
+  se_alaska:
+    region: "SE Alaska feeding grounds"
+    contexts:
+      feeding_social:
+        group_size: {uniform_int: [1, 6]}
+        callers: {uniform_int: [1, 3]}
+        call_mix:                          # Fournet 2015 n (HB001-HB015)
+          weights: {growl_ak: 100, whup: 33, modulated_moan_ak: 4, descending_moan: 4, groan_ak: 3, variable_moan: 3, swop: 57, teepee: 12, horse: 4, droplet: 9, squeegie: 8, trumpet_ak: 5, ahooga: 5, ascending_shriek_ak: 5, descending_shriek_ak: 4}
+        sequence:
+          type: bouts
+          rate_per_h: {lognormal_median: 10, range: [1, 60], src: HBX05}
+          bout_calls: {growl_ak: 1, whup: 1, swop: {mean: 6, sd: 7, range: [1, 25]}, droplet: {mean: 5, sd: 3}, teepee: {mean: 4, sd: 4}, horse: {mean: 7, sd: 5}, squeegie: {mean: 5, sd: 10, range: [1, 30]}, default: {uniform_int: [1, 3]}, src: HBX05}
+          bout_ici_s: {uniform: [0.5, 4], note: assumed}
+        timeline:
+          silent_spell_min: {lognormal_median: 10, range: [1, 90], note: assumed}
+        range_km: {loguniform: [0.2, 30]}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [30, 180]}
+      cooperative_feeding:
+        group_size: {uniform_int: [5, 11], src: HBX06}
+        callers: 1                          # one crier per group
+        sequence:
+          type: series
+          call_types: [feeding_cry]
+          series_cries: {lognormal_median: 3, range: [1, 20], src: "HB021, HBX06"}
+          inter_cry_s: {uniform: [1, 5], note: assumed}
+          series_interval_min: {uniform: [1, 5], note: "lunge cycle (assumed)"}
+          feeding_call_p: 0.3              # some encounters use Fournet multi-unit feeding call instead (HB016; assumed)
+        timeline:
+          silent_spell_min: {lognormal_median: 10, range: [2, 60], note: assumed}
+        range_km: {loguniform: [0.2, 30]}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [20, 120]}
+      song: {template: song, chorus_p: 0, note: "occasional feeding-ground song (HBX01)"}
+
+context_templates:
+  song:
+    callers: {choice: [1, 2, 3], weights: [0.6, 0.25, 0.15], src: HBX07}
+    sequence: {type: song, ref: song}
+    timeline:
+      silent_spell_min: {lognormal_median: 15, range: [2, 90], note: "between sessions (assumed)"}
+    range_km: {loguniform: [0.5, 30]}
+    encounter_len_min: {loguniform: [30, 180]}

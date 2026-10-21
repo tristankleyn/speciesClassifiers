@@ -134,3 +134,51 @@ def test_whistle_features_match_reference():
         np.testing.assert_allclose(T.apply_transforms(spec, transforms), r["spectrumpython"][k], rtol=1e-5, atol=1e-9)
         n += 1
     assert n > 30
+
+
+# ---------------------------------------------------------------- octave bins ----------
+def test_third_octave_bands_10hz_to_4khz():
+    e = T.octave_band_edges((10, 4000), 3)
+    c = np.sqrt(e[:-1] * e[1:])
+    assert len(c) == 27
+    assert np.isclose(c[0], 1000 * 2 ** (-20 / 3)) and np.isclose(c[-1], 4000.0)
+    assert np.allclose(e[1:] / e[:-1], 2 ** (1 / 3))  # every band is one third of an octave
+
+
+def test_linear_edges_unchanged():
+    assert np.allclose(T.whistle_bin_edges((2000, 20000)), 2000 + 100 * np.arange(181))
+    assert AcousticParams.whistles().n_bins() == 90
+
+
+def test_octave_params_bins_and_pdtf_entry():
+    ap = AcousticParams.whistles(freq_range=(10, 4000), binning="octave", downsample=1, frame_len=20)
+    assert ap.n_bins() == 27
+    w = ap.transforms()[0]
+    assert w["name"] == "whistles2spectrum"
+    assert w["params"]["binning"] == "octave" and w["params"]["bandsperoctave"] == 3
+    assert "binning" not in AcousticParams.whistles().transforms()[0]["params"]  # PAMGuard default untouched
+    with pytest.raises(ValueError):
+        AcousticParams.whistles(binning="mel")
+
+
+def test_octave_histogram_counts_points_per_band():
+    # a 20 Hz tone (20 points) and a 1 kHz tone (10 points) in a 20 s segment
+    c1 = {"start": 1.0, "duration": 0.4, "times": np.arange(20) * 0.02, "freqs": np.full(20, 20.0)}
+    c2 = {"start": 5.0, "duration": 0.2, "times": np.arange(10) * 0.02, "freqs": np.full(10, 1000.0)}
+    spec = T.whistles2spectrum([c1, c2], 0.0, 20.0, (10, 4000), 50.0, "octave", 3)
+    e = T.octave_band_edges((10, 4000), 3)
+    assert len(spec) == 27 and np.isclose(spec.sum(), 1.0)
+    i20 = np.searchsorted(e, 20.0) - 1
+    i1k = np.searchsorted(e, 1000.0) - 1
+    assert np.isclose(spec[i20], 2 / 3) and np.isclose(spec[i1k], 1 / 3)
+
+
+def test_octave_whistle_frames_end_to_end():
+    rows = [{"start": 2.0 + k, "duration": 1.0, "times": np.arange(50) * 0.02,
+             "freqs": np.linspace(28, 19, 50), "event_id": "e1", "label": "blue"} for k in range(5)]
+    ap = AcousticParams.whistles(freq_range=(10, 4000), binning="octave", downsample=1,
+                                 frame_len=20, hop=10, min_density=0.02, min_frag_ms=50)
+    fr = whistle_frames(pd.DataFrame(rows), ap)
+    feats = [c for c in fr.columns if c[0] == "f" and c[1:].isdigit()]
+    assert len(fr) >= 1 and len(feats) == 27
+    assert np.allclose(fr[feats].sum(axis=1), 1.0)

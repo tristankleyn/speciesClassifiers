@@ -16,6 +16,37 @@ written straight into the PAMGuard model file (see ``apply_transforms``).
 import numpy as np
 
 WHISTLE_BIN_HZ = 100.0  # fixed in PAMGuard's whistle2AverageArray
+WHISTLE_BINNINGS = ("linear", "octave")
+
+
+def octave_band_edges(freq_range, bands_per_octave=3, ref_hz=1000.0):
+    """Edges (Hz) of fractional-octave bands (base 2) covering ``freq_range``.
+
+    Band centres are ``ref_hz * 2**(n / bands_per_octave)``; a band is included when its centre
+    lies within ``freq_range`` widened by half a band at each end. For (10, 4000) Hz and three
+    bands per octave this gives 27 bands with centres ~9.8, 12.4, 15.6 ... 3175, 4000 Hz.
+    """
+    fmin, fmax = (float(f) for f in freq_range)
+    b = int(bands_per_octave)
+    if b < 1 or fmin <= 0 or fmax <= fmin:
+        raise ValueError("Need bands_per_octave >= 1 and 0 < fmin < fmax")
+    half = 2.0 ** (1.0 / (2 * b))
+    n0 = int(np.ceil(b * np.log2(fmin / half / ref_hz) - 1e-9))
+    n1 = int(np.floor(b * np.log2(fmax * half / ref_hz) + 1e-9))
+    centres = ref_hz * 2.0 ** (np.arange(n0, n1 + 1) / b)
+    return np.concatenate([centres / half, [centres[-1] * half]])
+
+
+def whistle_bin_edges(freq_range, binning="linear", bands_per_octave=3):
+    """Edges (Hz) of the whistle histogram bins: PAMGuard's fixed 100 Hz bins (``linear``) or
+    fractional-octave bands (``octave``)."""
+    if binning == "linear":
+        fmin, fmax = freq_range
+        nbins = int((fmax - fmin) / WHISTLE_BIN_HZ)
+        return fmin + WHISTLE_BIN_HZ * np.arange(nbins + 1)
+    if binning == "octave":
+        return octave_band_edges(freq_range, bands_per_octave)
+    raise ValueError(f"binning must be one of {WHISTLE_BINNINGS}")
 
 
 # ---------------------------------------------------------------- clicks ---------------
@@ -69,9 +100,10 @@ def whistle_points(contours, seg_start, min_frag_ms=0.0):
     return np.vstack(pts) if pts else np.empty((0, 2))
 
 
-def whistles2spectrum(contours, seg_start, seg_len, freq_range=(2000.0, 20000.0), min_frag_ms=200.0):
-    """Normalised histogram of whistle contour frequencies in 100 Hz bins
-    (PAMGuard ``whistles2spectrum``).
+def whistles2spectrum(contours, seg_start, seg_len, freq_range=(2000.0, 20000.0), min_frag_ms=200.0,
+                     binning="linear", bands_per_octave=3):
+    """Normalised histogram of whistle contour frequencies (PAMGuard ``whistles2spectrum``):
+    100 Hz bins by default, or fractional-octave bands with ``binning="octave"``.
 
     Uses every contour in the segment (starting or ending in it), keeping points from the
     segment start onwards.
@@ -80,12 +112,11 @@ def whistles2spectrum(contours, seg_start, seg_len, freq_range=(2000.0, 20000.0)
     after the segment end are kept. This is reproduced so features match PAMGuard.
     """
     pts = whistle_points(contours, seg_start, min_frag_ms)
-    fmin, fmax = freq_range
-    nbins = int((fmax - fmin) / WHISTLE_BIN_HZ)
+    edges = whistle_bin_edges(freq_range, binning, bands_per_octave)
+    nbins = len(edges) - 1
     seg_len_ms = seg_len * 1000.0  # PAMGuard quirk, see docstring
     keep = (pts[:, 0] >= 0) & (pts[:, 0] < seg_len_ms)
     f = pts[keep, 1]
-    edges = fmin + WHISTLE_BIN_HZ * np.arange(nbins + 1)
     counts = np.array([np.sum((f >= edges[i]) & (f < edges[i + 1])) for i in range(nbins)], float)
     total = counts.sum()
     return counts / total if total else counts

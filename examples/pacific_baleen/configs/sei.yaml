@@ -1,0 +1,101 @@
+# Sei whale — Pacific + Southern Ocean (v1). SE010/SE011 (attribution uncertain) excluded.
+class: Sei
+sd_inflation: 1.5
+individual_sd_ratio: 0.3                 # SEX07 (assumed)
+year_range: [2000, 2022]
+sampling_order: [context, population]    # equal encounters per call-pattern context (SEX01)
+drift: {}
+
+# SE004/SE005/SE008/SE009 report high/low frequency, not start/end: mapped by call direction.
+populations:
+
+  hawaii:
+    region: "Central N Pacific (Hawaiian Islands)"
+    call_types:
+      low_downsweep:  {model: sweep, f_start: {mean: 39.4, sd: 3.4, range: [31.3, 49.4]}, f_end: {mean: 21.0, sd: 2.4, range: [15.7, 27.3]}, duration: {mean: 1.2, sd: 0.11}, src: SE002}
+      high_downsweep: {model: sweep, f_start: {mean: 100.3, sd: 11.1, range: [92.4, 108.0]}, f_end: {mean: 44.6, sd: 2.9, range: [42.6, 46.6]}, duration: {mean: 1.2, sd: 0.07}, src: SE001}
+    contexts:
+      downsweep_calling:
+        template: downsweeps
+        call_mix: {weights: {low_downsweep: 105, high_downsweep: 2, note: "upweight high to 0.1 (assumed, n=2)"}, high_min_share: 0.1}
+        group_size: {uniform_int: [1, 4]}
+        callers: {uniform_int: [1, 2]}
+        active_rate_per_h: {lognormal_median: 50, range: [20, 100], src: SEX02}
+
+  southern_ocean_nz:
+    region: "Southern Ocean S of New Zealand (Auckland/Campbell Is.)"
+    call_types:
+      downsweep:   {model: sweep, f_start: {mean: 78.0, sd: 2.0}, f_end: {mean: 69.0, sd: 0.8}, duration: {mean: 0.7, cv: 0.1, note: "SD 0 reported"}, src: SE003}
+      up_down:     {model: modulated, f_start: {mean: 60, range: [49, 70], note: "start not reported (assumed above low)"}, f_peak: {mean: 83.3, sd: 4.1}, f_end: {mean: 53.8, sd: 4.9}, peak_position: {uniform: [0.2, 0.4]}, duration: {mean: 1.2, cv: 0.1}, src: SE004}
+      upsweep:     {model: sweep, f_start: {mean: 36.3, sd: 2.1}, f_end: {mean: 66.3, sd: 10.7, range: [45, 76]}, duration: {mean: 1.2, sd: 0.3}, src: SE005}
+    contexts:
+      upsweep_sets:
+        template: sets
+        call_types: [upsweep]
+        set_size: {uniform_int: [2, 9]}
+        ici_s: {mean: 10.3, sd: 2.3}
+        src: "SE005, SEX03"
+      mixed:
+        template: sets
+        call_mix: {weights: {up_down: 0.5, downsweep: 0.25, upsweep: 0.25, note: assumed}}
+        set_size: {uniform_int: [2, 9]}
+        ici_s: {mean: 4.8, sd: 0.6, src: SE004}
+        src: "SE003, SE004, SEX03"
+
+  chile_patagonia:
+    region: "Chilean Patagonia (Penas & Tres Montes gulfs)"
+    call_types:
+      downsweep: {model: modulated, f_start: {mean: 96, sd: 14, range: [70, 129.4]}, f_peak: {mean: 67.5, sd: 14.2, note: "peak lies mid-sweep"}, f_end: {mean: 41, sd: 5.5, range: [30, 55]}, duration: {mean: 1.6, sd: 0.25}, src: "SE006, SE007 (pooled 2016-17)"}
+    contexts:
+      downsweep_calling:
+        template: downsweeps
+        call_types: [downsweep]
+        grouping: {choice: [1, 2, 3], weights: [0.24, 0.57, 0.19], src: SEX04}
+        ini_s: {mean: 4, range: [3, 5], src: "SEX04 (~4 s)"}
+
+  juan_fernandez:
+    region: "SE Pacific (Juan Fernandez, HA03)"
+    call_types:
+      downsweep: {model: modulated, f_start: {mean: 102.3, sd: 13.2}, f_peak: {mean: 56.3, sd: 10.9}, f_end: {mean: 35.3, sd: 6.1}, duration: {mean: 1.3, sd: 0.1}, src: SE008}
+      upsweep:   {model: modulated, f_start: {mean: 41.3, sd: 5.2}, f_peak: {mean: 62.0, sd: 8.3}, f_end: {mean: 72.2, sd: 4.1}, duration: {mean: 1.5, sd: 0.3}, src: SE009}
+    contexts:
+      downsweep_calling:
+        template: downsweeps
+        call_types: [downsweep]
+        grouping: {choice: [1, 2, 3], weights: [0.24, 0.57, 0.19], note: "Patagonia weights borrowed (assumed)"}
+        ini_s: {mean: 4, range: [3.5, 4.5], src: SEX05}
+      upsweep_sets:
+        template: sets
+        call_types: [upsweep]
+        set_size: {uniform_int: [2, 9], note: "from S NZ (assumed)"}
+        ici_s: {choice: [7, 14], within_sd: 1.0, src: "SEX05 (mode drawn per encounter)"}
+      mixed:
+        template: sets
+        call_mix: {weights: {downsweep: 0.5, upsweep: 0.5, note: assumed}}
+        set_size: {uniform_int: [2, 9]}
+        ici_s: {uniform: [4, 14]}
+
+context_templates:
+  downsweeps:
+    group_size: {uniform_int: [1, 4]}
+    callers: {uniform_int: [1, 2]}
+    sequence: {type: groupings, grouping: {choice: [1, 2, 3], weights: [0.24, 0.57, 0.19]}, ini_s: {mean: 4, range: [3, 5]}}
+    active_rate_per_h: {lognormal_median: 30, range: [10, 60], src: "SEX02, SEX06"}
+    timeline:
+      active_spell_min: {lognormal_median: 20, range: [5, 90], note: assumed}
+      silent_spell_min: {lognormal_median: 30, range: [5, 240], src: "SEX06 (~3-5 calls/h encounter average)"}
+    range_km: {loguniform: [0.5, 50], src: SEX08}
+    chorus_p: 0                            # SEX09
+    encounter_len_min: {loguniform: [30, 180]}
+  sets:
+    group_size: {uniform_int: [1, 4]}
+    callers: {uniform_int: [1, 2]}
+    sequence: {type: sets}
+    set_gap_min: {lognormal_median: 5, range: [1, 30], src: "SEX03 (assumed)"}
+    timeline:
+      active_spell_min: {lognormal_median: 20, range: [5, 90]}
+      silent_spell_min: {lognormal_median: 30, range: [5, 240], src: SEX06}
+    range_km: {loguniform: [0.5, 50]}
+    detectability_note: "upper part of upsweeps lost first (SEX08)"
+    chorus_p: 0
+    encounter_len_min: {loguniform: [30, 180]}

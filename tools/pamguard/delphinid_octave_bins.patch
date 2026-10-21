@@ -1,0 +1,140 @@
+diff -ru a/src/rawDeepLearningClassifier/dlClassification/delphinID/DelphinIDTransform.java b/src/rawDeepLearningClassifier/dlClassification/delphinID/DelphinIDTransform.java
+--- a/src/rawDeepLearningClassifier/dlClassification/delphinID/DelphinIDTransform.java	2026-10-18 03:59:52.612357857 +0000
++++ b/src/rawDeepLearningClassifier/dlClassification/delphinID/DelphinIDTransform.java	2026-10-18 03:59:58.983358124 +0000
+@@ -208,6 +208,14 @@
+ 		Whistle2spectrumParams whistle2spectrumParmas = new Whistle2spectrumParams();
+ 		whistle2spectrumParmas = (Whistle2spectrumParams) readWhistleTransform(jsonObjectParams,  whistle2spectrumParmas);
+ 
++		//optional fractional-octave binning (default: PAMGuard's fixed 100 Hz bins)
++		if (jsonObjectParams.has("binning")) {
++			whistle2spectrumParmas.binning = jsonObjectParams.getString("binning").trim();
++		}
++		if (jsonObjectParams.has("bandsperoctave")) {
++			whistle2spectrumParmas.bandsPerOctave = jsonObjectParams.getInt("bandsperoctave");
++		}
++
+ 		return whistle2spectrumParmas;
+ 	}
+ 	
+diff -ru a/src/rawDeepLearningClassifier/dlClassification/delphinID/Whsitle2Spectrum.java b/src/rawDeepLearningClassifier/dlClassification/delphinID/Whsitle2Spectrum.java
+--- a/src/rawDeepLearningClassifier/dlClassification/delphinID/Whsitle2Spectrum.java	2026-10-18 03:59:52.566357855 +0000
++++ b/src/rawDeepLearningClassifier/dlClassification/delphinID/Whsitle2Spectrum.java	2026-10-18 03:59:58.983358124 +0000
+@@ -22,7 +22,8 @@
+ 
+ 
+ 	public Whsitle2Spectrum(SegmenterDetectionGroup whistleGroups, Whistle2spectrumParams transformParams) {
+-		this.spectrum = whistle2Spectrum(whistleGroups, transformParams.getFreqLimits(),  transformParams.minFragSize);
++		this.spectrum = whistle2Spectrum(whistleGroups, transformParams.getFreqLimits(),  transformParams.minFragSize,
++				transformParams.binEdges());
+ 
+ 	}
+ 
+@@ -37,6 +38,14 @@
+ 	 * @return the average spectrum. 
+ 	 */
+ 	public Spectrum whistle2Spectrum(SegmenterDetectionGroup whistleGroups, double[] freqLimits, double minFragSize) {
++		return whistle2Spectrum(whistleGroups, freqLimits, minFragSize, null);
++	}
++
++	/**
++	 * Convert whistles to a spectrum using explicit bin edges.
++	 * @param binEdges - bin edges in Hz (n+1 values for n bins), or null for the default 100 Hz bins.
++	 */
++	public Spectrum whistle2Spectrum(SegmenterDetectionGroup whistleGroups, double[] freqLimits, double minFragSize, double[] binEdges) {
+ 
+ 		//convert whistle contrours to time frequency points. 
+ 		ArrayList<double[][]> points = Whistles2Image.whistContours2Points(whistleGroups, minFragSize);
+@@ -44,7 +53,9 @@
+ 		//concatonate the contours into a singe aray
+ 		double[][] tfCntours = concatWhistleContours(points);
+ 
+-		double[] spectrumD  = whistle2AverageArray(tfCntours,  0,  whistleGroups.getSegmentDuration(), freqLimits);
++		double[] spectrumD  = binEdges == null ?
++				whistle2AverageArray(tfCntours,  0,  whistleGroups.getSegmentDuration(), freqLimits) :
++				whistle2AverageArray(tfCntours,  0,  whistleGroups.getSegmentDuration(), binEdges, true);
+ 
+ 		Spectrum spectrum = new Spectrum(spectrumD, null, whistleGroups.getSampleRate());
+ 
+@@ -136,6 +147,55 @@
+ 	
+ 	
+ 
++	/**
++	 * Convert whistle contours to an average normalised spectrum using explicit bin edges
++	 * (e.g. fractional-octave bands). Same counting rules as the 100 Hz version.
++	 * @param whistleValues - the whistle contour values (column 1 time in seconds, column 2 frequency).
++	 * @param startseg - the start segment in seconds.
++	 * @param seglen - the segment length (same units as the 100 Hz version).
++	 * @param binEdges - n+1 bin edges in Hz.
++	 * @param explicitEdges - marker to distinguish from the 100 Hz overload.
++	 * @return the normalised histogram.
++	 */
++	public static double[] whistle2AverageArray(double[][] whistleValues, double startseg, double seglen, double[] binEdges, boolean explicitEdges) {
++		int nbins = binEdges.length - 1;
++		double[] peakBins = new double[nbins];
++		int ntot = 0;
++		for (int i=0; i<nbins; i++) {
++			int n=0;
++			for (int j=0; j<whistleValues.length ; j++) {
++				if (whistleValues[j][1]>= binEdges[i] && whistleValues[j][1]< binEdges[i+1] && whistleValues[j][0]>=startseg && whistleValues[j][0]<(startseg+seglen)) {
++					n++;
++				}
++			}
++			ntot=ntot+n;
++			peakBins[i]=n;
++		}
++		if (ntot!=0) {
++			for (int i=0; i<nbins; i++) {
++				peakBins[i]=peakBins[i]/ntot;
++			}
++		}
++		return peakBins;
++	}
++
++	/**
++	 * Edges of fractional-octave bands (base 2, centres 1000*2^(n/b) Hz) whose centres lie within
++	 * freqLimits widened by half a band. Matches speciesclassifiers' octave_band_edges().
++	 */
++	public static double[] octaveBandEdges(double[] freqLimits, int bandsPerOctave) {
++		double b = bandsPerOctave;
++		double half = Math.pow(2.0, 1.0/(2.0*b));
++		int n0 = (int) Math.ceil(b * (Math.log(freqLimits[0]/half/1000.0)/Math.log(2.0)) - 1e-9);
++		int n1 = (int) Math.floor(b * (Math.log(freqLimits[1]*half/1000.0)/Math.log(2.0)) + 1e-9);
++		double[] edges = new double[n1 - n0 + 2];
++		for (int n = n0; n <= n1; n++) {
++			edges[n - n0] = 1000.0 * Math.pow(2.0, n/b) / half;
++		}
++		edges[n1 - n0 + 1] = 1000.0 * Math.pow(2.0, n1/b) * half;
++		return edges;
++	}
++
+ 	public Spectrum getSpectrum() {
+ 		return spectrum;
+ 	}
+@@ -146,6 +206,26 @@
+ 	}
+ 	
+ 	public static class Whistle2spectrumParams extends DetectionGroupTransformParams {
++
++		/**
++		 * Binning: "linear" (default, fixed 100 Hz bins) or "octave" (fractional-octave bands).
++		 */
++		public String binning = "linear";
++
++		/**
++		 * Bands per octave when binning is "octave" (3 = third-octave).
++		 */
++		public int bandsPerOctave = 3;
++
++		/**
++		 * Bin edges for the chosen binning, or null for the default 100 Hz bins.
++		 */
++		public double[] binEdges() {
++			if ("octave".equals(binning)) {
++				return octaveBandEdges(freqLimits, bandsPerOctave);
++			}
++			return null;
++		}
+ 		
+ 	
+ 		/**

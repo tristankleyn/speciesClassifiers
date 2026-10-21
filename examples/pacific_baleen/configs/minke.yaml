@@ -1,0 +1,105 @@
+# Minke whales — N Pacific common minke, dwarf minke (GBR), Antarctic minke (v1). One class.
+# BC pulse chains (MK005) excluded: not tonal. Star-wars content above 4 kHz ignored (MKX10).
+class: Minke
+sd_inflation: 1.5
+individual_sd_ratio: 0.3                 # boing PRR uses 0.6 (MKX04)
+year_range: [2000, 2022]
+sampling_order: [context, population]    # MKX01: boing-nominal, boing-rapid, BC downsweep, dwarf star-wars, Antarctic bio-duck, Antarctic downsweep
+drift: {}
+
+call_types:
+  # Boing: onset pulse not emitted; long AM tail -> parallel tonal bands spaced at the pulse repetition rate (PRR)
+  boing_central: {model: pulsed_band, carrier: {mean: 1395, range: [1350, 1440]}, sideband_spacing: {mean: 115.0, sd: 1.3, range: [114, 118]}, n_sidebands: {uniform_int: [1, 4]}, individual_sd_ratio: 0.6, duration: {mean: 2.6, sd: 0.4}, src: "MK001, MKX04"}
+  boing_eastern: {model: pulsed_band, carrier: {mean: 1400, range: [1350, 1450], note: "~1.4 kHz"}, sideband_spacing: {mean: 91.8, sd: 0.5, range: [91, 93]}, n_sidebands: {uniform_int: [1, 4]}, individual_sd_ratio: 0.6, duration: {mean: 3.6, sd: 0.5}, src: MK002}
+  bc_downsweep:  {model: modulated, f_start: {mean: 142, sd: 69}, f_peak: {mean: 105, sd: 36}, f_end: {mean: 38, sd: 11}, duration: {mean: 0.648, sd: 0.152}, src: MK004}
+  # Dwarf minke star-wars sequence AAABC (Gedamke 2001)
+  star_wars:
+    model: multipart
+    parts:
+      - {name: A, repeat: 3, gap_s: 0.02, model: multitone, components: {f_start: {mean: 2300, cv: 0.1}, f_end: {mean: 800, cv: 0.1}, harmonics_to_hz: 4000}, duration: {mean: 0.1, cv: 0.1}, src: MK006}
+      - {name: B, model: multitone, components: [{model: pulsed_band, carrier: {mean: 1800, range: [1650, 1950]}, sideband_spacing: 22}, {model: harmonic, f0: {mean: 80, cv: 0.05}, harmonics_to_hz: 1000}], duration: {mean: 0.24, cv: 0.2}, src: MK007}
+      - {name: C, model: multitone, components: [{model: harmonic, f0: {mean: 140, cv: 0.05}, harmonics_to_hz: 1000}, {model: pulsed_band, carrier: {mean: 1800, range: [1650, 1950]}, sideband_spacing: 22}], duration: {uniform: [0.5, 2.0]}, truncate_p: {rapid: 0.5, other: 0.1, note: "C often truncated/absent at high vocal rates"}, src: MK008}
+    note: "LF AM pulses under unit A (peak 250 Hz) not emitted (pulsive)"
+  dwarf_downsweep: {model: sweep, f_start: {mean: 250, cv: 0.15}, f_end: {mean: 50, cv: 0.2}, duration: {uniform: [0.2, 0.3]}, src: MK009}
+  # Antarctic minke bio-duck: series of downswept pulses (Dominello & Sirovic 2016; Risch 2014)
+  bioduck:
+    model: pulse_series
+    variants:
+      A1: {f_start: {mean: 231, sd: 19}, f_end: {mean: 116, sd: 20}, f_peak: {mean: 149, sd: 19}, pulse_s: {mean: 0.1, sd: 0.05}, pulse_interval_s: {mean: 0.4, sd: 0.1}, pulses: {mean: 4, sd: 1}, series_interval_s: {mean: 3.1, sd: 0.2}, peak_step_hz: 5.2, src: MK012}
+      A2: {f_start: {mean: 191, sd: 33}, f_end: {mean: 101, sd: 21}, f_peak: {mean: 131, sd: 22}, pulse_s: {mean: 0.2, sd: 0.1}, pulse_interval_s: {mean: 0.3, sd: 0.1}, pulses: {mean: 4, sd: 1}, series_interval_s: {mean: 3.1, sd: 0.6}, src: MK013}
+      B:  {f_start: {mean: 244, sd: 7}, f_end: {mean: 177, sd: 12}, f_peak: {mean: 216, sd: 14}, pulse_s: {mean: 0.1, sd: 0.05}, pulse_interval_s: {mean: 0.3, sd: 0.05}, pulses: {mean: 13, sd: 1}, series_interval_s: {mean: 5.1, sd: 0.8}, src: MK014}
+      C:  {f_start: {mean: 122, sd: 49}, f_end: {mean: 64, sd: 11}, f_peak: {mean: 85, sd: 22}, pulse_s: {mean: 0.2, sd: 0.1}, pulse_interval_s: {mean: 0.4, sd: 0.1}, pulses: {mean: 4, sd: 1}, series_interval_s: {mean: 2.7, sd: 0.1}, peak_step_hz: -6.2, src: MK015}
+      D:  {f_start: {mean: 155, sd: 16}, f_end: {mean: 52, sd: 8}, f_peak: {mean: 99, sd: 13}, pulse_s: {mean: 0.4, sd: 0.1}, pulses: 1, series_interval_s: {mean: 1.7, sd: 0.1}, src: MK016}
+    harmonics_to_hz: {uniform: [300, 1000], src: MK010}
+    regional_pulses: {choice: [3, 5.5, 7], note: "Ross Sea/D'Urville ~3, W Antarctica 5-6, tags 7+-3; overrides variant pulse count with p 0.5 (MKX08)"}
+  antarctic_downsweep: {model: sweep, f_start: {mean: 126, sd: 18}, f_end: {mean: 55, sd: 8}, f_peak: {mean: 97, sd: 16}, duration: {mean: 0.3, sd: 0.1}, alt: {p: 0.3, f_start: 130, f_end: 60, src: "MK011 Ross Sea"}, src: "MK017, MK011 (peak 83+-17, 0.2 s)"}
+
+populations:
+  np_central:
+    region: "Central N Pacific (Hawaii, west of 138W)"
+    contexts:
+      boing_nominal: {template: boing, call_types: [boing_central], ici_min: {mean: 6.85, sd: 2.54, min: 0.5}, src: MKX02}
+      boing_rapid:   {template: boing, call_types: [boing_central], ici_min: {mean: 0.63, sd: 0.36, min: 0.1}, neighbour_caller: {range_km: {uniform: [1, 12]}}, state_switch_p: 0.2, src: MKX02}
+  np_eastern:
+    region: "Eastern N Pacific (east of 138W)"
+    contexts:
+      boing_nominal: {template: boing, call_types: [boing_eastern], ici_min: {mean: 6.85, sd: 2.54, min: 0.5}, note: "Kauai rates borrowed (assumed)"}
+      boing_rapid:   {template: boing, call_types: [boing_eastern], ici_min: {mean: 0.63, sd: 0.36, min: 0.1}, neighbour_caller: {range_km: {uniform: [1, 12]}}, state_switch_p: 0.2}
+  bc_feeding:
+    region: "British Columbia (Cormorant Channel) feeding"
+    contexts:
+      bc_downsweep:
+        callers: 1
+        sequence: {type: irregular, call_types: [bc_downsweep], rate_per_h: {lognormal_median: 2, range: [0.5, 10]}, src: MKX05}
+        timeline: {silent_spell_min: {lognormal_median: 30, range: [10, 120], note: assumed}}
+        range_km: {loguniform: [0.2, 10]}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [60, 240], note: "long so a few calls occur"}
+  dwarf_gbr:
+    region: "Northern Great Barrier Reef (dwarf minke)"
+    contexts:
+      dwarf_star_wars:
+        group_size: {uniform_int: [1, 10]}
+        callers: {uniform_int: [1, 3]}
+        sequence:
+          type: bouts
+          call_types: [star_wars]
+          bout_min: {lognormal_median: 8, range: [3, 20], src: MKX06}
+          sequence_interval_s: {mean: 32.0, sd: 1.6, src: MK008}
+          dwarf_downsweep: {encounter_p: 0.6, rate_per_h: {uniform: [2, 20], note: "rate assumed"}, src: MKX06}
+        timeline: {silent_spell_min: {lognormal_median: 10, range: [2, 60], src: "MKX06 (assumed)"}}
+        range_km: {loguniform: [0.02, 5], src: MKX10}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [20, 120]}
+  antarctic:
+    region: "Southern Ocean (W Antarctic Peninsula; Ross Sea values for regional variation)"
+    contexts:
+      antarctic_bioduck:
+        callers: {uniform_int: [1, 3]}
+        sequence: {type: series, call_types: [bioduck], variants_per_encounter: {choice: [1, 2], weights: [0.7, 0.3]}, src: MKX07}
+        timeline:
+          bout_h: {lognormal_median: 1, range: [0.2, 6], src: "MKX07 (assumed)"}
+          silent_spell_min: {lognormal_median: 30, range: [5, 180]}
+        season: {months: Jun-Oct, note: "ice-associated; affects nothing else in v1"}
+        range_km: {loguniform: [1, 50]}
+        chorus_p: 0.3                     # distant bio-duck callers layer (MKX11, assumed)
+        encounter_len_min: {loguniform: [30, 180]}
+      antarctic_downsweep:
+        callers: {uniform_int: [1, 2]}
+        sequence: {type: irregular, call_types: [antarctic_downsweep], rate_per_h: {lognormal_median: 5, range: [1, 30]}, src: "MKX09 (assumed)"}
+        timeline: {silent_spell_min: {lognormal_median: 30, range: [5, 120]}}
+        range_km: {loguniform: [1, 50]}
+        chorus_p: 0
+        encounter_len_min: {loguniform: [30, 180]}
+
+context_templates:
+  boing:
+    callers: 1                             # focal caller; rapid context adds a neighbour
+    sequence: {type: spells, calls_per_spell: {uniform_int: [20, 150]}, src: MKX03}
+    timeline:
+      silent_spell_min: {lognormal_median: 20, range: [5, 60], src: MKX03}
+      end_with_silence_p: 0.3
+    season: {months: Oct-May}
+    range_km: {loguniform: [1, 30], src: MKX10}
+    chorus_p: 0
+    encounter_len_min: {loguniform: [30, 240]}

@@ -1,0 +1,190 @@
+# Fin whale — Pacific + Southern Ocean (v1). See README.md for notation.
+class: Fin
+sd_inflation: 1.5
+individual_sd_ratio: 0.3
+year_range: [2000, 2022]
+sampling_order: [context, population]    # equal encounters per context, then a population offering it
+
+shared_call_types:
+  pulse_A:                               # lower, narrower N Pacific note ("backbeat"/A)
+    model: sweep
+    f_start: {mean: 19.5, range: [17, 22], src: "FN011 (peak 16, 3 dB bw 6), FN013 (A ~18-19.8)"}
+    f_end:   {mean: 14.5, range: [13, 16], src: "FN004 backbeat 23->13 (assumed shape from peak/bw)"}
+    duration: {mean: 0.8, range: [0.5, 1.0], src: "FN001, FN016"}
+  pulse_B:                               # classic 20 Hz pulse / B note
+    model: sweep
+    f_start: {mean: 27.6, sd: 2.2, src: FN001}
+    f_end:   {mean: 17.5, sd: 1.5, src: "FN001 (14.9), FN012 (peak 23, bw 13); assumed"}
+    duration: {mean: 0.7, sd: 0.3, range: [0.3, 1.2], src: FN001}
+  pulse_southern:                        # Southern Hemisphere 20 Hz pulse
+    model: sweep
+    f_start: {mean: 27.6, sd: 2.2, src: FN001}
+    f_end:   {mean: 14.9, sd: 1.3, src: FN001}
+    duration: {mean: 0.7, sd: 0.3, range: [0.3, 1.2], src: FN001}
+  call_40Hz:
+    model: sweep
+    f_start: {mean: 61.2, sd: 6.6, src: FN017}
+    f_end:   {mean: 47.6, sd: 5.7, src: FN017}
+    duration: {mean: 1.0, range: [0.6, 1.4], src: "FN017 (~1 s)"}
+  downsweep_southern:                    # non-song fin downsweep (resembles blue D-call)
+    model: sweep
+    f_start: {mean: 75, range: [60, 90], src: "FN003 (form like Bm-D; assumed values)"}
+    f_end:   {mean: 40, range: [30, 50]}
+    duration: {mean: 1.5, range: [0.7, 3]}
+
+# HF component: narrowband tone simultaneous with each 20 Hz pulse (Southern Hemisphere only)
+hf_component:
+  model: tone
+  bandwidth_hz: {mean: 4.5, sd: 0.9, src: FN001}     # drawn as a slight sweep across this width
+  duration: {same_as_pulse: true}
+  level_db: {uniform: [-10, 0], note: "relative to pulse (assumed)"}
+
+drift:
+  ne_pacific_or_wa.pulse_A: {rate: -0.17, ref_year: 2008, src: FN013}
+  antarctic_wap.hf:         {rate: -0.2, ref_year: 2002, src: FN018}
+  song_INI_seasonal:        {rate_s_per_month: {uniform: [1.4, 2.9]}, months: Oct-Feb, reset: summer, src: "FN008-FN010"}
+
+# Context templates (filled per population below). Every context gets the same number of encounters.
+context_templates:
+  song:
+    callers: {choice: [1, 2], weights: [0.85, 0.15], src: FNX07}
+    timeline:
+      calling_period_min: {lognormal_median: 11.5, range: [5.4, 16.9], src: FNX05}
+      surfacing_gap: {lognormal_median: 116, range: [87, 154], src: FNX05}
+      bout_h: {lognormal_median: 3, range: [0.5, 15], src: FNX03}
+      silent_spell_min: {uniform: [20, 120], src: "FNX06 (Watkins 1987, Atlantic)"}
+    within_encounter_INI_sd: {uniform: [0.5, 1.0], src: FNX08}
+    variant_switch_p: 0.2                 # singlet/doublet/triplet switching (FNX08)
+    range_km: {loguniform: [1, 200], src: FNX12}
+    encounter_len_min: {loguniform: [30, 180]}
+  nonsong_20Hz:
+    group_size: {uniform_int: [1, 4]}
+    vocal_p: 0.33                          # FNX02
+    sequence: {type: irregular, rate_per_h: {lognormal_median: 80, range: [8, 150], src: FNX06}}
+    timeline:
+      calling_period_min: {lognormal_median: 11.5, range: [5.4, 16.9]}
+      surfacing_gap: {lognormal_median: 116, range: [87, 154]}
+      silent_spell_min: {uniform: [20, 120]}
+    range_km: {loguniform: [1, 150]}
+    encounter_len_min: {loguniform: [30, 180]}
+  calls_40Hz:
+    callers: {uniform_int: [1, 3]}
+    sequence: {type: irregular, call_types: [call_40Hz], rate_per_h: {lognormal_median: 10, range: [1, 60], src: "FNX09 (assumed rate)"}, clustered: true}
+    timeline:
+      calling_period_min: {lognormal_median: 8, range: [3, 15], note: assumed}
+      surfacing_gap: {lognormal_median: 116, range: [87, 154]}
+      silent_spell_min: {lognormal_median: 20, range: [5, 90], note: assumed}
+    range_km: {loguniform: [1, 150]}
+    chorus_p: 0
+    encounter_len_min: {loguniform: [20, 120]}
+
+populations:
+
+  ne_pacific_socal:
+    region: "S California Bight"
+    notes: [pulse_A, pulse_B]
+    song_patterns:                          # one drawn per caller; INIs in s (short / long)
+      long_doublet: {notes: [pulse_B, pulse_B], ini: [{uniform: [18, 28]}, {uniform: [24, 33]}], src: FN008}
+      short_doublet: {notes: [pulse_B, pulse_B], ini: [{uniform: [10, 17]}, {uniform: [17, 22]}], src: FN015}
+      long_triplet: {notes: [pulse_B, pulse_B, pulse_B], ini: [6, 6, 20], src: FN015}
+    contexts:
+      song: {template: song, chorus_p: {Sep-Dec: 0.8, other: 0.4, src: FNX10}}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_B], chorus_p: {Sep-Dec: 0.8, other: 0.4}}
+      calls_40Hz: {template: calls_40Hz}
+
+  ne_pacific_or_wa:
+    region: "Oregon, Washington, N California, British Columbia"
+    song_patterns:
+      singlet_A: {notes: [pulse_A], ini: [{uniform: [24.5, 33]}], src: FN013}
+      doublet_AB: {notes: [pulse_A, pulse_B], ini: [{uniform: [9, 13.4]}, {uniform: [15, 17.7]}], src: "FN014, FN014 (Vancouver Is 12.9/17.3)"}
+      juan_de_fuca_doublet: {notes: [pulse_B, pulse_B], ini: [25, 30], src: FN015}
+    contexts:
+      song: {template: song, chorus_p: 0.2, note: "assumed"}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_A, pulse_B], chorus_p: 0.2}
+      calls_40Hz: {template: calls_40Hz}
+
+  gulf_of_california:
+    region: "Gulf of California (resident population)"
+    song_patterns:
+      short_triplet: {notes: [pulse_B, pulse_B, pulse_B], ini: [5, 10, 11], src: FN015}
+      long_triplet: {notes: [pulse_B, pulse_B, pulse_B], ini: [6, 6, 20], src: FN015}
+    contexts:
+      song: {template: song, chorus_p: 0.2}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_B], chorus_p: 0.2}
+      calls_40Hz: {template: calls_40Hz}
+
+  bering_chukchi:
+    region: "Bering and Chukchi seas"
+    song_patterns:
+      doublet_CB: {notes: [pulse_B, pulse_A], ini: [{mean: 10.5, sd: 1.4}, {mean: 19.6, sd: 3.9}], src: FN016}
+      bering_doublet: {notes: [pulse_B, pulse_B], ini: [{uniform: [21, 26.5]}, {uniform: [28.4, 34.4]}], src: FN009}
+      triplet: {notes: [pulse_A, pulse_B, pulse_B], ini: [8, 15, 19], src: "FN016 (Delarue 2013 cited)"}
+    contexts:
+      song: {template: song, chorus_p: 0.2}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_A, pulse_B], chorus_p: 0.2}
+      calls_40Hz: {template: calls_40Hz}
+
+  hawaii:
+    region: "Central N Pacific (Hawaii)"
+    song_patterns:
+      AA_singlet: {notes: [pulse_A], ini: [{mean: 30, range: [28, 31]}], src: FN011}
+      AA_doublet: {notes: [pulse_A, pulse_A], ini: [28, 33], src: FN011}
+      BB_singlet: {notes: [pulse_B], ini: [{mean: 17, range: [15, 22]}], src: FN012}
+      BB_doublet: {notes: [pulse_B, pulse_B], ini: [17, 24], src: FN012}
+      AB_doublet: {notes: [pulse_A, pulse_B], ini: [12, 20], src: FN012}
+    contexts:
+      song: {template: song, chorus_p: 0.1, note: "few simultaneous singers (FNX07)"}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_A, pulse_B], chorus_p: 0.1}
+
+  new_zealand_north:
+    region: "North of NZ (Great Barrier Island, Cook Strait)"
+    hf_hz: {choice: [77, 88], doublet: true, src: FN019}
+    song_patterns:
+      doublet: {notes: [pulse_hi, pulse_lo], ini: [17, 9], src: FN006}
+    call_types:
+      pulse_hi: {model: sweep, f_start: {mean: 35, range: [30, 38]}, f_end: {mean: 17, range: [15, 19]}, duration: {mean: 0.8, range: [0.5, 1.0]}, src: FN006}
+      pulse_lo: {model: sweep, f_start: {mean: 21, range: [19, 23]}, f_end: {mean: 18, range: [16, 19]}, duration: {mean: 0.8, range: [0.5, 1.0]}, src: FN006}
+    contexts:
+      song: {template: song, chorus_p: 0.2, note: assumed}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_hi, pulse_lo], chorus_p: 0.2}
+
+  new_zealand_south:
+    region: "South of NZ"
+    hf_hz: {choice: [67, 73], doublet: true, src: FN019}
+    song_patterns:
+      generic: {notes: [pulse_southern], ini: [{uniform: [12, 16]}], note: "INI not reported (assumed)"}
+    contexts:
+      song: {template: song, chorus_p: 0.3}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_southern], chorus_p: 0.3}
+
+  east_australia:
+    region: "E Australia / Tasman Sea"
+    hf_hz: {choice: [82, 94], doublet: true, src: FN019}
+    song_patterns:
+      generic: {notes: [pulse_southern], ini: [{uniform: [12, 16]}], note: "INI not reported (assumed)"}
+    contexts:
+      song: {template: song, chorus_p: 0.3}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_southern], chorus_p: 0.3}
+
+  antarctic_wap:
+    region: "W Antarctic Peninsula, Scotia Sea, S Orkney + SE Pacific/Chile (86-89 Hz population; Chile merged)"
+    hf_hz: {mean: 87.5, sd: 1.25, range: [81, 92], src: "FN001 (89.2), FN018 (89->86), FN020 (85.8-88.5), FN007 (Chile 85)"}
+    song_patterns:
+      singlet: {notes: [pulse_southern], ini: [{uniform: [13, 14.5]}], src: FN018}
+      doublet: {notes: [pulse_southern, pulse_southern], ini: [{uniform: [13, 14.5]}, {uniform: [11, 12.5]}], src: FN018}
+      long_triplet: {notes: [pulse_southern, pulse_southern, pulse_southern], ini: [{uniform: [13, 14.5]}, {uniform: [13, 14.5]}, {uniform: [11, 12.5]}], src: FN018}
+      chile_singlet: {notes: [pulse_southern], ini: [{mean: 14.4, range: [13, 16]}], secondary_ini: 30.8, src: FN007}
+    contexts:
+      song: {template: song, chorus_p: {Mar-Jun: 0.8, other: 0.2, src: FNX10}, chorus_only_p: 0.2}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_southern, downsweep_southern], chorus_p: {Mar-Jun: 0.8, other: 0.2}}
+      calls_40Hz: {template: calls_40Hz, note: "40 Hz downsweeps reported in Southern Ocean (FN005)"}
+
+  antarctic_99:
+    region: "E Antarctica / Atlantic sector / W Australia (99 Hz population)"
+    hf_hz: {mean: 98, range: [96, 100], src: "FN002 (99), FN020 (96.82+-0.86)"}
+    song_patterns:
+      generic: {notes: [pulse_southern], ini: [{uniform: [12, 16]}], note: "INI not reported (assumed, ~WAP)"}
+    contexts:
+      song: {template: song, chorus_p: {Mar-Jun: 0.8, other: 0.2}, chorus_only_p: 0.2}
+      nonsong_20Hz: {template: nonsong_20Hz, call_types: [pulse_southern, downsweep_southern], chorus_p: {Mar-Jun: 0.8, other: 0.2}}
+      calls_40Hz: {template: calls_40Hz}

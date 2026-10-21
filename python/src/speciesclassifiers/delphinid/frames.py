@@ -35,6 +35,9 @@ class AcousticParams:
     fft_len         clicks: FFT length for click spectra
     smooth_window   clicks: moving-average window (bins) applied to the averaged spectrum
     downsample      factor to reduce the number of bins by averaging neighbours
+    binning         whistles: 'linear' (PAMGuard's 100 Hz bins, default) or 'octave'
+                    (fractional-octave bands; needs the matching PAMGuard change)
+    bands_per_octave  whistles: bands per octave when binning='octave' (3 = third-octave)
 
     The number of model inputs follows from these: see ``n_bins()``.
     """
@@ -49,10 +52,14 @@ class AcousticParams:
     fft_len: int = 512
     smooth_window: int = 3
     downsample: int = 2
+    binning: str = "linear"
+    bands_per_octave: int = 3
 
     def __post_init__(self):
         if self.voc_type not in ("click", "whistle"):
             raise ValueError("voc_type must be 'click' or 'whistle'")
+        if self.binning not in T.WHISTLE_BINNINGS:
+            raise ValueError(f"binning must be one of {T.WHISTLE_BINNINGS}")
         if self.hop is None:
             self.hop = self.frame_len
         self.freq_range = tuple(float(f) for f in self.freq_range)
@@ -71,8 +78,10 @@ class AcousticParams:
         """Transform list in PAMGuard ``delphinID.pdtf`` format."""
         fmin, fmax = self.freq_range
         if self.voc_type == "whistle":
-            steps = [{"name": "whistles2spectrum",
-                      "params": {"minfreq": fmin, "maxfreq": fmax, "minfragmillis": self.min_frag_ms}}]
+            wparams = {"minfreq": fmin, "maxfreq": fmax, "minfragmillis": self.min_frag_ms}
+            if self.binning != "linear":
+                wparams.update({"binning": self.binning, "bandsperoctave": int(self.bands_per_octave)})
+            steps = [{"name": "whistles2spectrum", "params": wparams}]
         else:
             steps = [{"name": "clicks2spectrum",
                       "params": {"minclks": self.min_clicks, "spectrum_dB": 1, "fft_len": self.fft_len, "hann": 0}},
@@ -87,13 +96,17 @@ class AcousticParams:
         """Number of model inputs. Clicks need the sample rate."""
         fmin, fmax = self.freq_range
         if self.voc_type == "whistle":
-            n = int((fmax - fmin) / T.WHISTLE_BIN_HZ)
+            n = len(self.bin_edges()) - 1
         else:
             if sample_rate is None:
                 raise ValueError("Clicks need sample_rate to work out the number of bins")
             nfft = self.fft_len // 2
             n = int(fmax / (sample_rate / 2) * nfft) - int(fmin / (sample_rate / 2) * nfft)
         return int(np.ceil(n / self.downsample))
+
+    def bin_edges(self):
+        """Whistles: edges (Hz) of the histogram bins before downsampling."""
+        return T.whistle_bin_edges(self.freq_range, self.binning, self.bands_per_octave)
 
     def to_dict(self):
         return asdict(self)
@@ -181,7 +194,8 @@ def whistle_frames(contours: pd.DataFrame, params: AcousticParams) -> pd.DataFra
             density = T.whistle_density(seg, t, params.frame_len)
             if not density >= params.min_density:
                 continue
-            spec = T.whistles2spectrum(seg, t, params.frame_len, params.freq_range, params.min_frag_ms)
+            spec = T.whistles2spectrum(seg, t, params.frame_len, params.freq_range, params.min_frag_ms,
+                                       params.binning, params.bands_per_octave)
             if spec.sum() == 0:
                 continue
             x = T.apply_transforms(spec, transforms)
